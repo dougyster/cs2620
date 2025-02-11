@@ -2,13 +2,18 @@ from abc import ABC, abstractmethod
 
 class BusinessLogicInterface(ABC):
     @abstractmethod
-    def create_user(self, user_name, user_email, user_password) -> bool:
+    def create_user(self, user_name, user_password) -> bool:
         """Create a new user with the provided details."""
         pass
 
     @abstractmethod
-    def get_user(self, user_email) -> dict:
-        """Retrieve a user by their email."""
+    def get_user(self, user_name) -> dict:
+        """Retrieve a user by their username."""
+        pass
+
+    @abstractmethod
+    def login_user(self, user_name, user_password) -> bool:
+        """Login a user with the provided details."""
         pass
 
     @abstractmethod

@@ -1,81 +1,124 @@
+import sys
+import os
+import struct
+import threading
+
+# Add the parent directory to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
 # importing interfaces
-from interfaces.business_logic_interface import BusinessLogicInterface
-from interfaces.db_interface import MongoDBInterface
+from backend.interfaces.business_logic_interface import BusinessLogicInterface
+from backend.interfaces.db_interface import MongoDBInterface
 
 # importing implementations
-from interactor.business_logic import BusinessLogic
-from database.mongo_operations import MongoOperation
+from backend.interactor.business_logic import BusinessLogic
+from backend.database.mongo_operations import MongoOperation
 
 # importing protocol
-from protocol.wire_protocol import WireProtocol
-from protocol.message_types import MessageType
+from backend.protocol.wire_protocol import serialize_success, serialize_error
 
 import socket
+
 class Controller:
     def __init__(self, business_logic: BusinessLogicInterface):
         self.business_logic = business_logic
 
     def handle_incoming_message(self, data: bytes):
-        msg_type, payload = WireProtocol.unpack_message(data)
-
-        # maybe these functions should return a truthy value to indicate success?
-        if msg_type == MessageType.CREATE_USER:
-            maybe_success = self.business_logic.create_user(payload["user_name"], payload["user_email"], payload["user_password"])
-            if maybe_success:
-                return WireProtocol.pack_message(MessageType.SUCCESS, {"message": "User created successfully"})
-            else:
-                return WireProtocol.pack_message(MessageType.ERROR, {"message": "User creation failed"})
-        elif msg_type == MessageType.GET_USER:
-            maybe_user = self.business_logic.get_user(payload["user_email"])
-            if maybe_user:
-                return WireProtocol.pack_message(MessageType.SUCCESS, maybe_user)
-            else:
-                return WireProtocol.pack_message(MessageType.ERROR, {"message": "User not found"})
-        elif msg_type == MessageType.SEND_MESSAGE:
-            maybe_success = self.business_logic.send_message(payload["sender"], payload["receiver"], payload["message"])
-            if maybe_success:
-                return WireProtocol.pack_message(MessageType.SUCCESS, {"message": "Message sent successfully"})
-            else:
-                return WireProtocol.pack_message(MessageType.ERROR, {"message": "Message sending failed"})
-        elif msg_type == MessageType.GET_MESSAGES:
-            maybe_messages = self.business_logic.get_messages(payload["sender"], payload["receiver"])
-            if maybe_messages:
-                return WireProtocol.pack_message(MessageType.SUCCESS, maybe_messages)
-            else:
-                return WireProtocol.pack_message(MessageType.ERROR, {"message": "No messages found"})
-        elif msg_type == MessageType.UPDATE_VIEW_COUNT:
-            maybe_success = self.business_logic.update_view_count(payload["view_count"], payload["user_email"])
-            if maybe_success:
-                return WireProtocol.pack_message(MessageType.SUCCESS, {"message": "View count updated successfully"})
-            else:
-                return WireProtocol.pack_message(MessageType.ERROR, {"message": "View count update failed"})
-        else:
-            return WireProtocol.pack_message(MessageType.ERROR, {"message": "Invalid message type"})
+        print(f"Received data: {data}")
         
+        try:
+            # Read header (5 bytes)
+            header = data[:5]
+            msg_type_code, payload_len = struct.unpack('!BI', header)
+            msg_type = chr(msg_type_code)
+            
+            # Read payload
+            payload = data[5:5+payload_len]
+            
+            # Process message based on type
+            if msg_type == 'R':  # Register/Create User
+                offset = 0
+                user_len = struct.unpack_from('!H', payload, offset)[0]
+                offset += 2
+                username = payload[offset:offset+user_len].decode('utf-8')
+                offset += user_len
+                pass_len = struct.unpack_from('!H', payload, offset)[0]
+                offset += 2
+                password = payload[offset:offset+pass_len].decode('utf-8')
+                
+                # Call business logic
+                success = self.business_logic.create_user(username, password)
+                if success:
+                    return serialize_success("User created successfully")
+                else:
+                    return serialize_error("Failed to create user or duplicate user")
+            elif msg_type == 'L':  # Login
+                offset = 0
+                user_len = struct.unpack_from('!H', payload, offset)[0]
+                offset += 2
+                username = payload[offset:offset+user_len].decode('utf-8')
+                offset += user_len
+                pass_len = struct.unpack_from('!H', payload, offset)[0]
+                offset += 2
+                password = payload[offset:offset+pass_len].decode('utf-8')
+                
+                maybe_success = self.business_logic.login_user(username, password)
+                if maybe_success:
+                    return serialize_success("Login successful")
+                else:
+                    return serialize_error("Login failed")
+            else:
+                return serialize_error("Invalid message type")
+                
+        except Exception as e:
+            print(f"Error processing message: {e}")
+            return serialize_error(str(e))
 
 def start_server():
-    # initialize the business logic
+    # Initialize the business logic
     business_logic = BusinessLogic(MongoOperation())
     controller = Controller(business_logic)
 
-    # start the server
+    # Start the server
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(('localhost', 8080))
+    server.bind(('0.0.0.0', 8081))
     server.listen(5)
-    print("Server is running on localhost:8080")
+    print("Server is running on port 8081")
 
-    # handle a single client at a time
     try:
         while True:
             client_socket, client_address = server.accept()
             print(f"Connection established with {client_address}")
-
-            data = client_socket.recv(1024)
-            response = controller.handle_incoming_message(data)
-            client_socket.sendall(response)
-            client_socket.close()
+            handle_client_connection(client_socket, client_address, controller)
     finally:
         server.close()
+
+def handle_client_connection(client_socket, client_address, controller):
+    """Handle a client connection in a separate thread."""
+    thread = threading.Thread(
+        target=handle_client_messages,
+        args=(client_socket, client_address, controller)
+    )
+    thread.daemon = True
+    thread.start()
+
+def handle_client_messages(client_socket, client_address, controller):
+    """Handle messages from a client."""
+    try:
+        while True:
+            data = client_socket.recv(1024)
+            if not data:
+                print(f"Client {client_address} disconnected")
+                break
+
+            response = controller.handle_incoming_message(data)
+            if response:
+                client_socket.sendall(response)
+    except Exception as e:
+        print(f"Error handling client {client_address}: {e}")
+    finally:
+        client_socket.close()
+        print(f"Connection closed with {client_address}")
 
 if __name__ == "__main__":
     start_server()

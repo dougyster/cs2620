@@ -1,18 +1,29 @@
 import struct
 import json
-from protocol.message_types import MessageType
 
-class WireProtocol:
-    HEADER_SIZE = 8  # 4 bytes for length, 4 bytes for message type
+def serialize_success(message: str) -> bytes:
+    """
+    Serializes a success message with format:
+    - 1 byte for message type ('S')
+    - 4 bytes for payload length
+    - Variable length UTF-8 encoded message
+    """
+    msg_type = ord('S')  # Convert 'S' to its ASCII value
+    payload = message.encode('utf-8')
+    header = struct.pack('!BI', msg_type, len(payload))
+    return header + payload
+
+
+def serialize_error(message: str) -> bytes:
+    """
+    Serializes an error message with format:
+    - 1 byte for message type ('E')
+    - 4 bytes for payload length
+    - Variable length UTF-8 encoded message
+    """
+    msg_type = ord('E')  # Convert 'E' to its ASCII value
+    payload = message.encode('utf-8')
+    header = struct.pack('!BI', msg_type, len(payload))
+    return header + payload
     
-    @staticmethod
-    def pack_message(msg_type: MessageType, payload: dict) -> bytes:
-        payload_bytes = json.dumps(payload).encode('utf-8')
-        header = struct.pack('!II', len(payload_bytes), msg_type.value)
-        return header + payload_bytes
     
-    @staticmethod
-    def unpack_message(data: bytes) -> tuple[MessageType, dict]:
-        msg_length, msg_type = struct.unpack('!II', data[:WireProtocol.HEADER_SIZE])
-        payload = json.loads(data[WireProtocol.HEADER_SIZE:WireProtocol.HEADER_SIZE + msg_length])
-        return MessageType(msg_type), payload
