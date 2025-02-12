@@ -68,12 +68,12 @@ class Controller:
                 maybe_success = self.business_logic.login_user(username, password)
                 self.online_users[username] = client_socket
                 if maybe_success:
-                    # messages = self.business_logic.get_messages(username)
-                    # if messages:
-                    #     return serialize_all_messages(messages)
-                    # else:
-                    #     return serialize_error("No messages found")
-                    return serialize_success("Login successful")
+                    messages = self.business_logic.get_messages(username)
+                    client_socket.sendall(serialize_success("Login successful"))
+                    if messages:
+                        return serialize_all_messages(messages)
+                    else:
+                        return serialize_error("No messages found")
                 else:
                     return serialize_error("Login failed")
             elif msg_type == 'M':  # Message handling
