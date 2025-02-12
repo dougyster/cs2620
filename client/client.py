@@ -222,11 +222,17 @@ class ClientApp:
         
         self.client_socket.sendall(self.serialize_message('M', payload))
 
+        # Add message to chat area immediately
+        self.chat_area.config(state='normal')
+        self.chat_area.insert(tk.END, f"[{self.username}]: {message}\n")
+        self.chat_area.see(tk.END)  # Scroll to bottom
+        self.chat_area.config(state='disabled')
 
+        # Store message in history
         if recipient not in self.messages_by_user:
             self.messages_by_user[recipient] = []
         self.messages_by_user[recipient].append(f"[{self.username}]: {message}")
-        self.display_conversation(recipient)
+        
         self.message_entry.delete(0, tk.END)
 
     def receive_messages(self):
