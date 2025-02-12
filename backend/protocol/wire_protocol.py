@@ -48,3 +48,23 @@ def serialize_all_messages(messages_dict: dict) -> bytes:
     bulk_response = serialize_message('B', bulk_payload)
     print(f"Serialized messages response: {bulk_response}")
     return bulk_response
+
+def serialize_user_list(users: list) -> bytes:
+    """
+    Serializes a list of usernames with format:
+    - 1 byte for message type ('U')
+    - 4 bytes for payload length
+    - For each user:
+        - 2 bytes for username length
+        - Variable length UTF-8 encoded username
+    """
+    # Prepare the payload
+    payload = bytearray()
+    
+    # Pack each username
+    for username in users:
+        username_bytes = username.encode('utf-8')
+        payload.extend(struct.pack('!H', len(username_bytes)))
+        payload.extend(username_bytes)
+        
+    return serialize_message('U', payload)

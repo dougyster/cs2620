@@ -2,7 +2,8 @@ import socket
 import struct
 import threading
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
+from typing import Callable
 
 class ClientApp:
     def __init__(self):
@@ -12,6 +13,7 @@ class ClientApp:
         self.root = tk.Tk()
         self.root.title("Chat Client")
         self.login_screen()
+        self.user_list = []
         
     def read_exact(self, n):
         data = b''
@@ -42,8 +44,8 @@ class ClientApp:
             widget.destroy()
         
         # Configure the main window
-        self.root.configure(bg='#36393f')  # Discord-like dark theme
-        self.root.geometry("800x600")
+        self.root.configure(bg='#36393f')
+        self.root.geometry("1000x600")
         
         # Create main container
         main_container = tk.Frame(self.root, bg='#36393f')
@@ -56,6 +58,29 @@ class ClientApp:
         
         # Sidebar header
         tk.Label(sidebar, text="Conversations", bg='#2f3136', fg='white', font=('Arial', 12, 'bold')).pack(pady=10)
+        
+        # Add search frame only if we have users
+        print(f"User list before rendering bar: {self.user_list}")
+        search_frame = ttk.Frame(sidebar)
+        search_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Create StringVar to track changes
+        self.search_var = tk.StringVar()
+        self.search_var.trace('w', self.filter_users)
+        
+        # Create combobox with the StringVar
+        self.user_search = ttk.Combobox(search_frame, 
+                                       values=self.user_list,
+                                       textvariable=self.search_var)
+        self.user_search.pack(fill='x')
+        self.user_search.bind('<<ComboboxSelected>>', self.on_user_selected)
+        
+        # Style the combobox to match theme
+        style = ttk.Style()
+        style.configure('TCombobox', 
+                       fieldbackground='#40444b',
+                       background='#2f3136',
+                       foreground='white')
         
         # Contacts list frame with scrollbar
         contacts_frame = tk.Frame(sidebar, bg='#2f3136')
@@ -150,7 +175,9 @@ class ClientApp:
         if chr(msg_type) == 'S':
             self.username = username
             messagebox.showinfo("Success", payload.decode())
+            self.request_user_list()
             self.chat_screen()
+            
         else:
             messagebox.showerror("Error", payload.decode())
 
@@ -233,6 +260,10 @@ class ClientApp:
 
                 elif chr(msg_type) == 'B':  # Bulk message delivery (stored messages)
                     self.handle_bulk_messages(payload)
+                
+                elif chr(msg_type) == 'U':  # User list
+                    print(f"User list: {payload}")
+                    self.handle_user_list(payload)
 
             except Exception as e:
                 print(f"Receive error: {e}")
@@ -335,6 +366,72 @@ class ClientApp:
         selection = self.contacts_list.curselection()
         if selection:
             self.display_conversation(self.contacts_list.get(selection[0]))
+
+    def request_user_list(self):
+        """Request the list of all users from the server"""
+        msg_type = 'G'
+        payload = b''  # Empty payload for this request
+        header = struct.pack('!BI', ord(msg_type), len(payload))
+        self.client_socket.sendall(header + payload)
+    
+    def handle_user_list(self, payload: bytes) -> list:
+        """
+        Deserialize the user list from the server response
+        Returns a list of usernames
+        """
+        self.user_list = []  # Reset the list first
+        offset = 0
+        while offset < len(payload):
+            username_len = struct.unpack('!H', payload[offset:offset + 2])[0]
+            offset += 2
+            username = payload[offset:offset + username_len].decode('utf-8')
+            offset += username_len
+            self.user_list.append(username)
+        print(f"User list: {self.user_list}")
+        
+        # Update the combobox with new user list
+        if hasattr(self, 'user_search'):
+            self.user_search['values'] = self.user_list
+        return
+
+    def create_search_frame(self):
+        """Create a simple search frame for users"""
+        search_frame = ttk.Frame(self.root)
+        search_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Create combobox that will show filtered results
+        self.user_search = ttk.Combobox(search_frame, values=self.user_list)
+        self.user_search.pack(fill='x')
+        
+        # Bind selection event
+        self.user_search.bind('<<ComboboxSelected>>', self.on_user_selected)
+        
+    def on_user_selected(self, event):
+        """Handle user selection from combobox"""
+        selected_user = self.user_search.get()
+        if selected_user and selected_user != self.username:  # Don't start chat with yourself
+            # Add user to contacts if not already there
+            if selected_user not in self.messages_by_user:
+                self.messages_by_user[selected_user] = []
+                self.update_contacts_list()
+            # Select the user in contacts list
+            idx = list(self.messages_by_user.keys()).index(selected_user)
+            self.contacts_list.selection_clear(0, tk.END)
+            self.contacts_list.selection_set(idx)
+            self.on_contact_select(None)  # Update chat area
+
+    def filter_users(self, *args):
+        """Filter users based on search text"""
+        search_text = self.search_var.get().lower()
+        filtered_users = [
+            user for user in self.user_list 
+            if search_text in user.lower() and user != self.username
+        ]
+        self.user_search['values'] = filtered_users
+        
+        # Keep the dropdown open while typing
+        if filtered_users:
+            self.user_search.event_generate('<Down>')
 
 if __name__ == "__main__":
     app = ClientApp()

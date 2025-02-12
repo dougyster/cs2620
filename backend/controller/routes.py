@@ -15,7 +15,7 @@ from backend.interactor.business_logic import BusinessLogic
 from backend.database.mongo_operations import MongoOperation
 
 # importing protocol
-from backend.protocol.wire_protocol import serialize_success, serialize_error, serialize_all_messages
+from backend.protocol.wire_protocol import serialize_success, serialize_error, serialize_all_messages, serialize_user_list
 
 import socket
 
@@ -102,6 +102,9 @@ class Controller:
                     return serialize_success("Message sent")
                 else:
                     return serialize_error("Message not sent")
+            elif msg_type == 'G':  # Get Users
+                users = self.business_logic.get_all_users()
+                return serialize_user_list(users)
             else:
                 return serialize_error("Invalid message type")
                 
