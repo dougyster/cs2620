@@ -1,5 +1,6 @@
 import sys
 import os
+import bcrypt  # Add this import at the top
 
 # Add the parent directory to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -13,9 +14,13 @@ class BusinessLogic(BusinessLogicInterface):
         self.db_operations = db_operations
 
     def create_user(self, user_name, user_password) -> bool:
+        # Hash the password
+        salt = bcrypt.gensalt()
+        hashed_password = bcrypt.hashpw(user_password.encode('utf-8'), salt)
+        
         user_data = {
             "user_name": user_name,
-            "user_password": user_password,
+            "user_password": hashed_password,  # Store the hashed password
             "view_count": 5 # default view count of 5
         }
 
@@ -42,14 +47,18 @@ class BusinessLogic(BusinessLogicInterface):
         return [doc["user_name"] for doc in docs]
     
     def login_user(self, user_name, user_password) -> bool:
-        print(f"Logging in user: {user_name} with password: {user_password}")
+        print(f"Logging in user: {user_name}")  # Removed password from print for security
         query = {"user_name": user_name}
         user_doc = self.db_operations.read("users", query)
-        print(f"User doc: {user_doc}")
+        
         if len(user_doc) == 0:
             return False
-        if user_doc[0].get("user_password") != user_password:
+            
+        # Compare the hashed passwords
+        stored_password = user_doc[0].get("user_password")
+        if not bcrypt.checkpw(user_password.encode('utf-8'), stored_password):
             return False
+            
         print(f"Login successful for user: {user_name}")
         return True
 
