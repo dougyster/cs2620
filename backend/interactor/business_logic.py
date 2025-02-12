@@ -22,7 +22,16 @@ class BusinessLogic(BusinessLogicInterface):
         print(f"Inserting user: {user_data}")
         result = self.db_operations.insert("users", user_data)
         return result
-
+    
+    def delete_user(self, user_name) -> bool:
+        query = {"user_name": user_name}
+        result = self.db_operations.delete("users", query)
+        if result is not None and result > 0:
+            print(f"User deleted: {user_name}")
+            return True
+        else:
+            print(f"User deletion failed: {user_name}")
+            return False
 
     def get_user(self, user_name) -> dict:
         query = {"user_name": user_name}
@@ -37,7 +46,7 @@ class BusinessLogic(BusinessLogicInterface):
         query = {"user_name": user_name}
         user_doc = self.db_operations.read("users", query)
         print(f"User doc: {user_doc}")
-        if user_doc is None:
+        if len(user_doc) == 0:
             return False
         if user_doc[0].get("user_password") != user_password:
             return False
@@ -92,15 +101,38 @@ class BusinessLogic(BusinessLogicInterface):
         print(f"Messages: {messages_dict}")
         return messages_dict
     
-    # def update_online_status(self, user_name, online_status) -> bool:
-    #     query = {"user_name": user_name}
-    #     update_values = {"online": online_status}
-    #     try:
-    #         result = self.db_operations.update("users", query, update_values)
-    #         print(f"Updated online status for user {user_name} to {online_status}")
-    #         return result is not None and result > 0
-    #     except Exception:
-    #         return False
+    def delete_message(self, message:str, timestamp:str, sender:str, receiver:str) -> bool:
+        from datetime import datetime
+        try:
+            # Parse the timestamp string to datetime
+            timestamp_dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+            
+            # Create a query with timestamp range to account for millisecond differences
+            # This will match messages within the same second
+            from datetime import timedelta
+            start_time = timestamp_dt
+            end_time = timestamp_dt + timedelta(seconds=1)
+            
+            query = {
+                "message": message,
+                "sender": sender,
+                "receiver": receiver,
+                "timestamp": {
+                    "$gte": start_time,
+                    "$lt": end_time
+                }
+            }
+            
+            result = self.db_operations.delete("messages", query)
+            if result is not None and result > 0:
+                print(f"Message deleted: {message} from {sender} to {receiver} at {timestamp}")
+                return True
+            else:
+                print(f"Message failed to delete: {message} from {sender} to {receiver} at {timestamp}")
+                return False
+        except Exception as e:
+            print(f"Error deleting message: {e}")
+            return False
         
     def update_view_count(self, view_count, user_email) -> bool:
         query = {"user_email": user_email}

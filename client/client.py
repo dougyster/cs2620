@@ -92,6 +92,22 @@ class ClientApp:
         self.contacts_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.contacts_list.bind('<<ListboxSelect>>', self.on_contact_select)
         
+        # Add delete account button at the bottom of sidebar
+        delete_account_btn = tk.Button(
+            sidebar,
+            text="Delete Account",
+            command=self.delete_account,
+            bg='#ED4245',  # Discord's danger red
+            fg='white',
+            relief=tk.FLAT,
+            font=('Arial', 10),
+            padx=10,
+            pady=5,
+            activebackground='#c03537',  # Darker red for hover
+            activeforeground='white'
+        )
+        delete_account_btn.pack(side=tk.BOTTOM, pady=10)
+        
         # Chat area container
         chat_container = tk.Frame(main_container, bg='#36393f')
         chat_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -141,8 +157,30 @@ class ClientApp:
         self.chat_area.delete(1.0, tk.END)
         if contact in self.messages_by_user:
             for msg in self.messages_by_user[contact]:
-                self.chat_area.insert(tk.END, msg + '\n')
+                # Create a frame for each message
+                msg_frame = tk.Frame(self.chat_area, bg='#36393f')
+                self.chat_area.window_create(tk.END, window=msg_frame)
+                
+                # Add message text
+                msg_label = tk.Label(msg_frame, text=msg, bg='#36393f', fg='white',
+                                   wraplength=500, justify=tk.LEFT)
+                msg_label.pack(side=tk.LEFT, pady=2)
+                
+                # Add delete button
+                delete_btn = tk.Button(
+                    msg_frame, 
+                    text="×", 
+                    bg='#36393f', 
+                    fg='#ff4444',
+                    font=('Arial', 8),
+                    relief=tk.FLAT,
+                    command=lambda m=msg: self.handle_delete_message(m, contact)
+                )
+                delete_btn.pack(side=tk.RIGHT, padx=5)
+                
+                self.chat_area.insert(tk.END, '\n')
         self.chat_area.config(state='disabled')
+        self.chat_area.see(tk.END)
 
     def update_contacts_list(self):
         self.contacts_list.delete(0, tk.END)
@@ -270,6 +308,17 @@ class ClientApp:
                 elif chr(msg_type) == 'U':  # User list
                     print(f"User list: {payload}")
                     self.handle_user_list(payload)
+
+                elif chr(msg_type) == 'S':  # For delete confirmation
+                    success = payload.decode() == "Message deleted"
+                    if success:
+                        messagebox.showinfo("Success", "Message deleted successfully")
+                    elif payload.decode() == "User deleted successfully":
+                        messagebox.showinfo("Success", "Account deleted successfully")
+                        self.root.after(0, self.login_screen)  # Return to login screen
+                        break  # Exit the receive loop
+                    else:
+                        messagebox.showerror("Error", "Failed to execute action")
 
             except Exception as e:
                 print(f"Receive error: {e}")
@@ -438,6 +487,43 @@ class ClientApp:
         # Keep the dropdown open while typing
         if filtered_users:
             self.user_search.event_generate('<Down>')
+
+    def delete_message(self, message_content, timestamp, sender, receiver):
+        """Serialize and send a delete message request"""
+        payload = (
+            struct.pack('!H', len(message_content)) + message_content.encode() +
+            timestamp.encode() +
+            struct.pack('!H', len(sender)) + sender.encode() +
+            struct.pack('!H', len(receiver)) + receiver.encode()
+        )
+        self.client_socket.sendall(self.serialize_message('D', payload))
+
+    def handle_delete_message(self, message, contact):
+        """Handle the deletion of a message"""
+        if messagebox.askyesno("Delete Message", "Are you sure you want to delete this message?"):
+            # Extract timestamp and content from the message
+            # Example message format: "[2024-03-14 12:34:56] [sender -> receiver]: content"
+            try:
+                timestamp = message[1:20]  # Extract timestamp
+                content_start = message.index(']:') + 3
+                content = message[content_start:].strip()
+                
+                # Send delete request
+                self.delete_message(content, timestamp, self.username, contact)
+                
+                # Remove from local storage and refresh display
+                if contact in self.messages_by_user:
+                    self.messages_by_user[contact].remove(message)
+                    self.display_conversation(contact)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to delete message: {e}")
+
+    def delete_account(self):
+        """Send a request to delete the current user's account"""
+        if messagebox.askyesno("Delete Account", 
+                              "Are you sure you want to delete your account? This cannot be undone."):
+            payload = struct.pack('!H', len(self.username)) + self.username.encode()
+            self.client_socket.sendall(self.serialize_message('U', payload))
 
 if __name__ == "__main__":
     app = ClientApp()

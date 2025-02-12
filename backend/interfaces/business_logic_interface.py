@@ -7,6 +7,11 @@ class BusinessLogicInterface(ABC):
         pass
 
     @abstractmethod
+    def delete_user(self, user_name) -> bool:
+        """Delete a user by their username."""
+        pass
+
+    @abstractmethod
     def get_user(self, user_name) -> dict:
         """Retrieve a user by their username."""
         pass
@@ -29,6 +34,11 @@ class BusinessLogicInterface(ABC):
     @abstractmethod
     def get_messages(self, user) -> dict:
         """Retrieve all messages for a user."""
+        pass
+
+    @abstractmethod
+    def delete_message(self, message:str, timestamp:str, sender:str, receiver:str) -> bool:
+        """Delete a message by its ID."""
         pass
 
     @abstractmethod

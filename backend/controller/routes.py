@@ -105,6 +105,46 @@ class Controller:
             elif msg_type == 'G':  # Get Users
                 users = self.business_logic.get_all_users()
                 return serialize_user_list(users)
+            elif msg_type == 'D':  # Delete Message
+                offset = 0
+                message_len = struct.unpack_from('!H', payload, offset)[0]
+                offset += 2
+                message = payload[offset:offset+message_len].decode()
+                offset += message_len
+                
+                # Fixed timestamp extraction (16 characters)
+                timestamp = payload[offset:offset+19].decode()  # Increased to 19 for full timestamp
+                offset += 19
+                
+                # Properly unpack sender length and data
+                sender_len = struct.unpack_from('!H', payload, offset)[0]
+                offset += 2
+                sender = payload[offset:offset+sender_len].decode()
+                offset += sender_len
+                
+                # Properly unpack receiver length and data
+                receiver_len = struct.unpack_from('!H', payload, offset)[0]
+                offset += 2
+                receiver = payload[offset:offset+receiver_len].decode()
+                
+                did_delete = self.business_logic.delete_message(message, timestamp, sender, receiver)
+                if did_delete:
+                    print(f"message deleted, sending success")
+                    return serialize_success("Message deleted")
+                else:
+                    print(f"message not deleted, sending error")
+                    return serialize_error("Message not deleted")
+            elif msg_type == 'U':  # Delete User
+                offset = 0
+                user_len = struct.unpack_from('!H', payload, offset)[0]
+                offset += 2
+                username = payload[offset:offset+user_len].decode()
+                offset += user_len
+                success = self.business_logic.delete_user(username)
+                if success:
+                    return serialize_success("User deleted successfully")
+                else:
+                    return serialize_error("Failed to delete user")
             else:
                 return serialize_error("Invalid message type")
                 
