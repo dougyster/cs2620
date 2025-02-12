@@ -40,18 +40,89 @@ class ClientApp:
     def chat_screen(self):
         for widget in self.root.winfo_children():
             widget.destroy()
-            
-        self.chat_area = tk.Text(self.root, state='disabled')
-        self.chat_area.pack()
         
-        self.recipient_entry = tk.Entry(self.root, width=15)
-        self.recipient_entry.pack(side='left')
+        # Configure the main window
+        self.root.configure(bg='#36393f')  # Discord-like dark theme
+        self.root.geometry("800x600")
         
-        self.message_entry = tk.Entry(self.root, width=40)
-        self.message_entry.pack(side='left')
+        # Create main container
+        main_container = tk.Frame(self.root, bg='#36393f')
+        main_container.pack(fill=tk.BOTH, expand=True)
         
-        tk.Button(self.root, text="Send", command=self.send_message).pack()
+        # Create sidebar for contacts
+        sidebar = tk.Frame(main_container, width=200, bg='#2f3136')
+        sidebar.pack(side=tk.LEFT, fill=tk.Y)
+        sidebar.pack_propagate(False)
+        
+        # Sidebar header
+        tk.Label(sidebar, text="Conversations", bg='#2f3136', fg='white', font=('Arial', 12, 'bold')).pack(pady=10)
+        
+        # Contacts list frame with scrollbar
+        contacts_frame = tk.Frame(sidebar, bg='#2f3136')
+        contacts_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.contacts_list = tk.Listbox(contacts_frame, bg='#2f3136', fg='white', 
+                                       selectmode=tk.SINGLE, relief=tk.FLAT,
+                                       font=('Arial', 10))
+        self.contacts_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.contacts_list.bind('<<ListboxSelect>>', self.on_contact_select)
+        
+        # Chat area container
+        chat_container = tk.Frame(main_container, bg='#36393f')
+        chat_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Chat header
+        self.chat_header = tk.Label(chat_container, text="Select a conversation", 
+                                   bg='#36393f', fg='white', font=('Arial', 12, 'bold'))
+        self.chat_header.pack(fill=tk.X, pady=10)
+        
+        # Chat messages area with scrollbar
+        self.chat_area = tk.Text(chat_container, bg='#36393f', fg='white', 
+                                wrap=tk.WORD, state='disabled')
+        scrollbar = tk.Scrollbar(chat_container, command=self.chat_area.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.chat_area.pack(fill=tk.BOTH, expand=True, padx=10)
+        self.chat_area.configure(yscrollcommand=scrollbar.set)
+        
+        # Message input area
+        input_frame = tk.Frame(chat_container, bg='#36393f')
+        input_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        self.message_entry = tk.Entry(input_frame, bg='#40444b', fg='white', 
+                                     relief=tk.FLAT, font=('Arial', 10))
+        self.message_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5, padx=(0, 10))
+        
+        send_button = tk.Button(input_frame, text="Send", command=self.send_message,
+                               bg='#5865f2', fg='white', relief=tk.FLAT,
+                               font=('Arial', 10), padx=15, pady=5,
+                               activebackground='#4752c4', activeforeground='white')
+        send_button.pack(side=tk.RIGHT)
+        
+        # Start receiving messages
+        self.messages_by_user = {}  # Store messages by user
         threading.Thread(target=self.receive_messages, daemon=True).start()
+
+    def on_contact_select(self, event):
+        selection = self.contacts_list.curselection()
+        if selection:
+            contact = self.contacts_list.get(selection[0])
+            self.current_contact = contact
+            self.chat_header.config(text=f"Chat with {contact}")
+            self.display_conversation(contact)
+
+    def display_conversation(self, contact):
+        self.chat_area.config(state='normal')
+        self.chat_area.delete(1.0, tk.END)
+        if contact in self.messages_by_user:
+            for msg in self.messages_by_user[contact]:
+                self.chat_area.insert(tk.END, msg + '\n')
+        self.chat_area.config(state='disabled')
+
+    def update_contacts_list(self):
+        self.contacts_list.delete(0, tk.END)
+        for contact in sorted(self.messages_by_user.keys()):
+            self.contacts_list.insert(tk.END, contact)
 
     def serialize_message(self, msg_type, payload):
         return struct.pack('!BI', ord(msg_type), len(payload)) + payload
@@ -107,24 +178,29 @@ class ClientApp:
             messagebox.showerror("Error", payload.decode())
 
     def send_message(self):
-        recipient = self.recipient_entry.get()
-        msg_content = self.message_entry.get()
+        if not hasattr(self, 'current_contact'):
+            messagebox.showerror("Error", "Please select a contact first")
+            return
         
+        message = self.message_entry.get()
+        if not message:
+            return
+        
+        recipient = self.current_contact
         payload = (
             struct.pack('!H', len(self.username)) + self.username.encode() +
             struct.pack('!H', len(recipient)) + recipient.encode() +
-            struct.pack('!I', len(msg_content)) + msg_content.encode()
+            struct.pack('!I', len(message)) + message.encode()
         )
+        
         self.client_socket.sendall(self.serialize_message('M', payload))
 
-        # Display the sent message in the chat window
-        self.chat_area.config(state='normal')
-        self.chat_area.insert(tk.END, f"[You -> {recipient}]: {msg_content}\n")
-        self.chat_area.config(state='disabled')
 
-        # Clear the message entry field for new input
+        if recipient not in self.messages_by_user:
+            self.messages_by_user[recipient] = []
+        self.messages_by_user[recipient].append(f"[{self.username}]: {message}")
+        self.display_conversation(recipient)
         self.message_entry.delete(0, tk.END)
-
 
     def receive_messages(self):
         while True:
@@ -156,42 +232,8 @@ class ClientApp:
                     self.animate_message()
 
                 elif chr(msg_type) == 'B':  # Bulk message delivery (stored messages)
-                    offset = 0
-                    while offset < len(payload):
-                        # Read the length of the packed message
-                        msg_len = struct.unpack_from('!I', payload, offset)[0]
-                        offset += 4
+                    self.handle_bulk_messages(payload)
 
-                        # Extract the packed message
-                        msg_data = payload[offset:offset + msg_len]
-                        offset += msg_len
-
-                        # Deserialize individual fields from the packed message
-                        sender_len = struct.unpack_from('!H', msg_data, 0)[0]
-                        sender = msg_data[2:2 + sender_len].decode()
-
-                        receiver_len_offset = 2 + sender_len
-                        receiver_len = struct.unpack_from('!H', msg_data, receiver_len_offset)[0]
-                        receiver = msg_data[receiver_len_offset + 2:receiver_len_offset + 2 + receiver_len].decode()
-
-                        content_offset = receiver_len_offset + 2 + receiver_len
-                        content_len = struct.unpack_from('!I', msg_data, content_offset)[0]
-                        content = msg_data[content_offset + 4:content_offset + 4 + content_len].decode()
-
-                        timestamp_offset = content_offset + 4 + content_len
-                        timestamp = struct.unpack_from('!I', msg_data, timestamp_offset)[0]
-
-                        # Convert timestamp to a human-readable format
-                        from datetime import datetime
-                        readable_timestamp = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
-
-                        # Display the message in the chat window
-                        self.chat_area.config(state='normal')
-                        self.chat_area.insert(tk.END, f"[{readable_timestamp}] [Stored][{sender} -> {receiver}]: {content}\n")
-                        self.chat_area.config(state='disabled')
-
-
-                    
             except Exception as e:
                 print(f"Receive error: {e}")
                 break
@@ -200,18 +242,99 @@ class ClientApp:
         self.chat_area.config(state='normal')
         end = self.chat_area.index(tk.END)
         
+        # Get system background color
+        bg_color = self.root.cget('bg')
+        is_dark = self._is_dark_theme(bg_color)
+        
+        # Configure colors based on theme
+        if is_dark:
+            flash_colors = ["#404000", "#303000", None]  # Dark yellow to system background
+        else:
+            flash_colors = ["#ffff00", "#ffff88", None]  # Bright yellow to system background
+        
         # Create animation tags
-        self.chat_area.tag_config("flash", background="#ffff00")
+        self.chat_area.tag_config("flash", background=flash_colors[0])
         self.chat_area.tag_add("flash", f"{end}-2l", end)
         
         # Animate background color
-        self.flash_animation(0, end)
+        self.flash_animation(0, end, flash_colors)
 
-    def flash_animation(self, count, position):
-        colors = ["#ffff00", "#ffff88", "#ffffff"]
-        self.chat_area.tag_config("flash", background=colors[count])
-        if count < 2:
-            self.root.after(150, lambda: self.flash_animation(count+1, position))
+    def flash_animation(self, count, position, colors):
+        if count < len(colors):
+            color = colors[count]
+            if color is None:  # Reset to system background
+                self.chat_area.tag_delete("flash")
+            else:
+                self.chat_area.tag_config("flash", background=color)
+            self.root.after(150, lambda: self.flash_animation(count+1, position, colors))
+
+    def _is_dark_theme(self, color):
+        """Determine if the system theme is dark based on background color."""
+        try:
+            # Convert color name to RGB
+            rgb = self.root.winfo_rgb(color)
+            # Convert 16-bit RGB values to 8-bit
+            r, g, b = rgb[0]//256, rgb[1]//256, rgb[2]//256
+            # Calculate perceived brightness
+            brightness = (r * 299 + g * 587 + b * 114) / 1000
+            return brightness < 128
+        except:
+            return False  # Default to light theme if color parsing fails
+
+    def handle_bulk_messages(self, payload):
+        """Handle bulk message delivery (stored messages)."""
+        try:
+            messages_to_process = []
+            offset = 0
+            while offset < len(payload):
+                # Read the length of the packed message
+                msg_len = struct.unpack_from('!I', payload, offset)[0]
+                offset += 4
+
+                # Extract the packed message
+                msg_data = payload[offset:offset + msg_len]
+                offset += msg_len
+
+                # Deserialize individual fields from the packed message
+                sender_len = struct.unpack_from('!H', msg_data, 0)[0]
+                sender = msg_data[2:2 + sender_len].decode()
+
+                receiver_len_offset = 2 + sender_len
+                receiver_len = struct.unpack_from('!H', msg_data, receiver_len_offset)[0]
+                receiver = msg_data[receiver_len_offset + 2:receiver_len_offset + 2 + receiver_len].decode()
+
+                content_offset = receiver_len_offset + 2 + receiver_len
+                content_len = struct.unpack_from('!I', msg_data, content_offset)[0]
+                content = msg_data[content_offset + 4:content_offset + 4 + content_len].decode()
+
+                timestamp_offset = content_offset + 4 + content_len
+                timestamp = struct.unpack_from('!I', msg_data, timestamp_offset)[0]
+
+                # Convert timestamp to a human-readable format
+                from datetime import datetime
+                readable_timestamp = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+
+                # Store message by user
+                other_user = sender if sender != self.username else receiver
+                if other_user not in self.messages_by_user:
+                    self.messages_by_user[other_user] = []
+                
+                msg_text = f"[{readable_timestamp}] [{sender} -> {receiver}]: {content}"
+                self.messages_by_user[other_user].append(msg_text)
+                messages_to_process.append((other_user, msg_text))
+            
+            # Update UI on main thread
+            self.root.after(0, self.update_chat_with_messages, messages_to_process)
+            
+        except Exception as e:
+            print(f"Error handling bulk messages: {e}")
+
+    def update_chat_with_messages(self, messages):
+        self.update_contacts_list()
+        # If a contact is selected, update the chat area
+        selection = self.contacts_list.curselection()
+        if selection:
+            self.display_conversation(self.contacts_list.get(selection[0]))
 
 if __name__ == "__main__":
     app = ClientApp()

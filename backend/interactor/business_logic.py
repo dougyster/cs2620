@@ -28,6 +28,10 @@ class BusinessLogic(BusinessLogicInterface):
         query = {"user_name": user_name}
         return self.db_operations.read("users", query) or {}
     
+    def get_all_users(self) -> list:
+        docs = self.db_operations.read("users", {}) or []
+        return [doc["user_name"] for doc in docs]
+    
     def login_user(self, user_name, user_password) -> bool:
         print(f"Logging in user: {user_name} with password: {user_password}")
         query = {"user_name": user_name}

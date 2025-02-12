@@ -12,6 +12,11 @@ class BusinessLogicInterface(ABC):
         pass
 
     @abstractmethod
+    def get_all_users(self) -> list:
+        """Retrieve all users from the database."""
+        pass
+
+    @abstractmethod
     def login_user(self, user_name, user_password) -> bool:
         """Login a user with the provided details."""
         pass
