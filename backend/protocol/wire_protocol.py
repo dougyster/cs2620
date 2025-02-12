@@ -25,5 +25,26 @@ def serialize_error(message: str) -> bytes:
     payload = message.encode('utf-8')
     header = struct.pack('!BI', msg_type, len(payload))
     return header + payload
+
+def serialize_message(msg_type, payload):
+    return struct.pack('!BI', ord(msg_type), len(payload)) + payload
+
+def serialize_all_messages(messages_dict: dict) -> bytes:
+    """
+    Serialize a dictionary of messages where each key is a user and value is a list of message objects.
+    Returns a success message ('S') with the serialized messages as payload.
+    """
+    bulk_payload = b''
+    for user, messages in messages_dict.items():
+        for msg in messages:
+            packed_msg = (
+                struct.pack('!H', len(msg['sender'])) + msg['sender'].encode() +
+                struct.pack('!H', len(msg['receiver'])) + msg['receiver'].encode() + 
+                struct.pack('!I', len(msg['message'])) + msg['message'].encode() + 
+                struct.pack('!I', int(msg['timestamp'].timestamp()))  # Convert to integer
+            )
+            bulk_payload += struct.pack('!I', len(packed_msg)) + packed_msg
     
-    
+    bulk_response = serialize_message('B', bulk_payload)
+    print(f"Serialized messages response: {bulk_response}")
+    return bulk_response

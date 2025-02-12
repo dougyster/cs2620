@@ -58,22 +58,35 @@ class BusinessLogic(BusinessLogicInterface):
             return False
     
     # this needs to be constantly called to update the view count via websocket?
-    def get_messages(self, sender, receiver) -> list:
-        messages = []
+    def get_messages(self, user) -> dict:
+        messages_dict = {}
         
-        # add all messages from sender to receiver
-        query = {"sender": sender, "receiver": receiver}
-        sender_messages = self.db_operations.read("messages", query) or []
-        messages.extend(sender_messages)
-
-        # add all messages from receiver to sender
-        query = {"sender": receiver, "receiver": sender}
-        receiver_messages = self.db_operations.read("messages", query) or []
-        messages.extend(receiver_messages)
-
-        # sort by timestamp
-        print(f"Messages: {messages}")
-        return sorted(messages, key=lambda x: x["timestamp"])
+        # Query for messages where the user is the sender
+        query = {"sender": user}
+        sent_messages = self.db_operations.read("messages", query) or []
+        
+        for message in sent_messages:
+            receiver = message["receiver"]
+            if receiver not in messages_dict:
+                messages_dict[receiver] = []
+            messages_dict[receiver].append(message)
+        
+        # Query for messages where the user is the receiver
+        query = {"receiver": user}
+        received_messages = self.db_operations.read("messages", query) or []
+        
+        for message in received_messages:
+            sender = message["sender"]
+            if sender not in messages_dict:
+                messages_dict[sender] = []
+            messages_dict[sender].append(message)
+        
+        # Sort messages for each user by timestamp
+        for user in messages_dict:
+            messages_dict[user] = sorted(messages_dict[user], key=lambda x: x["timestamp"])
+        
+        print(f"Messages: {messages_dict}")
+        return messages_dict
     
     # def update_online_status(self, user_name, online_status) -> bool:
     #     query = {"user_name": user_name}
@@ -100,6 +113,6 @@ if __name__ == "__main__":
     # print(business_logic.create_user("John Doe", "john.doe@example.com", "password123"))
     # print(business_logic.get_user("john.doe@example.com"))
     # print(business_logic.send_message("John Doe", "Jane Smith", "Hello, how are you?"))
-    print(business_logic.get_messages("John Doe", "Jane Smith"))
+    print(business_logic.get_messages("John Doe"))
     print(business_logic.update_view_count(10, "john.doe@example.com"))
 

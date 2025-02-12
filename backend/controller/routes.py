@@ -15,16 +15,19 @@ from backend.interactor.business_logic import BusinessLogic
 from backend.database.mongo_operations import MongoOperation
 
 # importing protocol
-from backend.protocol.wire_protocol import serialize_success, serialize_error
+from backend.protocol.wire_protocol import serialize_success, serialize_error, serialize_all_messages
 
 import socket
 
 class Controller:
     def __init__(self, business_logic: BusinessLogicInterface):
         self.business_logic = business_logic
+        self.online_users = {}  # Track online users {username: client_socket}
+        self.lock = threading.Lock()  # For thread-safe operations
 
-    def handle_incoming_message(self, data: bytes):
+    def handle_incoming_message(self, data: bytes, client_socket: socket.socket):
         print(f"Received data: {data}")
+        print(f"Client socket: {client_socket}")
         
         try:
             # Read header (5 bytes)
@@ -63,10 +66,40 @@ class Controller:
                 password = payload[offset:offset+pass_len].decode('utf-8')
                 
                 maybe_success = self.business_logic.login_user(username, password)
+                self.online_users[username] = client_socket
                 if maybe_success:
+                    messages = self.business_logic.get_messages(username)
+                    if messages:
+                        client_socket.sendall(serialize_all_messages(messages))
                     return serialize_success("Login successful")
                 else:
                     return serialize_error("Login failed")
+            elif msg_type == 'M':  # Message handling
+                offset = 0
+                sender_len = struct.unpack_from('!H', payload, offset)[0]
+                offset += 2
+                sender = payload[offset:offset+sender_len].decode()
+                offset += sender_len
+                recipient_len = struct.unpack_from('!H', payload, offset)[0]
+                offset += 2
+                recipient = payload[offset:offset+recipient_len].decode()
+                offset += recipient_len
+                msg_len = struct.unpack_from('!I', payload, offset)[0]
+                offset += 4
+                msg_content = payload[offset:offset+msg_len].decode()
+
+                did_message_send = self.business_logic.send_message(sender, recipient, msg_content)
+                
+                with self.lock:
+                    if recipient in self.online_users:
+                        # Recipient is online, forward immediately
+                        recipient_socket = self.online_users[recipient]
+                        recipient_socket.sendall(data)
+
+                if did_message_send:
+                    return serialize_success("Message sent")
+                else:
+                    return serialize_error("Message not sent")
             else:
                 return serialize_error("Invalid message type")
                 
@@ -111,14 +144,18 @@ def handle_client_messages(client_socket, client_address, controller):
                 print(f"Client {client_address} disconnected")
                 break
 
-            response = controller.handle_incoming_message(data)
+            response = controller.handle_incoming_message(data, client_socket)
             if response:
                 client_socket.sendall(response)
     except Exception as e:
         print(f"Error handling client {client_address}: {e}")
     finally:
         client_socket.close()
+        with controller.lock:
+            if client_address[0] in controller.online_users:
+                del controller.online_users[client_address[0]]
         print(f"Connection closed with {client_address}")
+
 
 if __name__ == "__main__":
     start_server()

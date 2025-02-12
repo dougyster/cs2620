@@ -22,8 +22,8 @@ class BusinessLogicInterface(ABC):
         pass
 
     @abstractmethod
-    def get_messages(self, sender, receiver) -> list:
-        """Retrieve messages exchanged between the sender and receiver."""
+    def get_messages(self, user) -> dict:
+        """Retrieve all messages for a user."""
         pass
 
     @abstractmethod
