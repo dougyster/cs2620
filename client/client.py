@@ -9,11 +9,14 @@ import json
 from client_wire_protocol import ClientWireProtocol
 from client_json_protocol import ClientJsonProtocol
 from client_serialization_interface import ClientSerializationInterface
+import os
 
 class ClientApp:
     def __init__(self, serialization_interface: ClientSerializationInterface):
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.client_socket.connect(('10.250.133.226', 8081))
+        host = os.getenv('CHAT_APP_HOST', '0.0.0.0')  # Default to 0.0.0.0
+        port = int(os.getenv('CHAT_APP_PORT', '8081'))  # Default to 8081
+        self.client_socket.connect((host, port))
         self.username = ""
         self.root = tk.Tk()
         self.root.title("Chat Client")
@@ -130,7 +133,7 @@ class ClientApp:
         
         # Create StringVar to track changes
         self.search_var = tk.StringVar()
-        self.search_var.trace('w', self.filter_users)
+        self.search_var.trace_add('write', self.filter_users)
         
         # Create combobox with the StringVar
         self.user_search = ttk.Combobox(search_frame, 
@@ -162,7 +165,7 @@ class ClientApp:
             text="Delete Account",
             command=self.delete_account,
             bg='#ED4245',  # Discord's danger red
-            fg='white',
+            fg='black',
             relief=tk.FLAT,
             font=('Arial', 10),
             padx=10,
@@ -211,7 +214,7 @@ class ClientApp:
             text="Update",
             command=self.update_view_count,
             bg='#5865f2',
-            fg='white',
+            fg='black',
             font=('Arial', 8),
             relief=tk.FLAT
         )
@@ -244,7 +247,7 @@ class ClientApp:
         self.message_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5, padx=(0, 10))
         
         send_button = tk.Button(input_frame, text="Send", command=self.send_message,
-                               bg='#5865f2', fg='white', relief=tk.FLAT,
+                               bg='#000080', fg='black', relief=tk.FLAT,
                                font=('Arial', 10), padx=15, pady=5,
                                activebackground='#4752c4', activeforeground='white')
         send_button.pack(side=tk.RIGHT)
@@ -339,7 +342,7 @@ class ClientApp:
             msg_frame, 
             text="×", 
             bg='#36393f', 
-            fg='#ff4444',
+            fg='black',
             font=('Arial', 8),
             relief=tk.FLAT,
             command=lambda m=msg: self.handle_delete_message(m, self.current_contact)
@@ -360,7 +363,7 @@ class ClientApp:
             text=f"View More ({remaining_count} messages remaining)",
             command=self.display_next_batch,
             bg='#5865f2',
-            fg='white',
+            fg='black',
             relief=tk.FLAT,
             font=('Arial', 10),
             padx=10,
@@ -405,8 +408,10 @@ class ClientApp:
             self.password_error.config(text=password_error)
             return
         
+        data = self.serialize_message('L', [username, password])
+        print(f"Sending login: {len(data)} bytes")  
         # Proceed with login
-        self.client_socket.sendall(self.serialize_message('L', [username, password]))
+        self.client_socket.sendall(data)
         
         # Get response
         if self.is_json:
@@ -534,7 +539,9 @@ class ClientApp:
         
         recipient = self.current_contact
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        self.client_socket.sendall(self.serialize_message('M', [self.username, recipient, message]))
+        data = self.serialize_message('M', [self.username, recipient, message])
+        print(f"Sending message: {len(data)} bytes")
+        self.client_socket.sendall(data)
 
         # Add message to chat area immediately
         self.chat_area.config(state='normal')
@@ -788,5 +795,7 @@ class ClientApp:
 if __name__ == "__main__":
     wire_protocol = ClientWireProtocol()
     json_protocol = ClientJsonProtocol()
-    app = ClientApp(wire_protocol) # change protocol here
+    
+    # Choose which protocol to use 
+    app = ClientApp(json_protocol) # change protocol here
     app.root.mainloop()

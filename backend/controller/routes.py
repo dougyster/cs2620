@@ -66,7 +66,9 @@ class Controller:
                     
                     client_socket.sendall(self.wire_protocol.serialize_success("Login successful"))
                     if messages:
-                        client_socket.sendall(self.wire_protocol.serialize_all_messages(messages))
+                        serialized_messages = self.wire_protocol.serialize_all_messages(messages)
+                        print(f"Sending messages: {len(serialized_messages)} bytes")  
+                        client_socket.sendall(serialized_messages)
                     
                     log_off_time = user.get('log_off_time')
                     view_count = user.get('view_count', 5)
@@ -90,7 +92,9 @@ class Controller:
                     return self.wire_protocol.serialize_error("Message not sent")
             elif msg_type == 'G':  # Get User List
                 user_list = self.business_logic.get_all_users()
-                return self.wire_protocol.serialize_user_list(user_list)
+                serialized_user_list = self.wire_protocol.serialize_user_list(user_list)
+                print(f"Sending user list: {len(serialized_user_list)} bytes")  
+                return serialized_user_list
             elif msg_type == 'D':  # Delete Message
                 message, timestamp, sender, receiver = self.wire_protocol.deserialize_delete_message(payload)
                     
@@ -135,7 +139,7 @@ def start_server():
     # Implement protocols
     wire_protocol = WireProtocol()  
     json_protocol = JsonProtocol()
-    protocol_of_choice = wire_protocol # change protocol here
+    protocol_of_choice = json_protocol # change protocol here
     is_json = protocol_of_choice == json_protocol
 
     # Initialize controller
@@ -143,9 +147,11 @@ def start_server():
 
     # Start the server
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(('0.0.0.0', 8081))
+    host = os.getenv('CHAT_APP_HOST', '0.0.0.0')  # Default to 0.0.0.0
+    port = int(os.getenv('CHAT_APP_PORT', '8081'))  # Default to 8081
+    server.bind((host, port))
     server.listen(5)
-    print("Server is running on port 8081")
+    print(f"Server is running on port {port}")
 
     try:
         while True:
