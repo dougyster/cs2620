@@ -3,17 +3,26 @@ import struct
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
-from typing import Callable
+from datetime import datetime
+import json
+
+from client_wire_protocol import ClientWireProtocol
+from client_json_protocol import ClientJsonProtocol
+from client_serialization_interface import ClientSerializationInterface
 
 class ClientApp:
-    def __init__(self):
+    def __init__(self, serialization_interface: ClientSerializationInterface):
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.client_socket.connect(('10.250.133.226', 8081))
         self.username = ""
         self.root = tk.Tk()
         self.root.title("Chat Client")
+        self.serialization_interface = serialization_interface
+        self.is_json = isinstance(serialization_interface, ClientJsonProtocol)
         self.login_screen()
         self.user_list = []
+        self.last_log_off = None
+        self.view_count = 5
         
     def read_exact(self, n):
         data = b''
@@ -28,16 +37,71 @@ class ClientApp:
         for widget in self.root.winfo_children():
             widget.destroy()
             
-        tk.Label(self.root, text="Username").pack()
-        self.username_entry = tk.Entry(self.root)
+        # Create main frame with padding
+        main_frame = tk.Frame(self.root, padx=20, pady=20)
+        main_frame.pack(expand=True)
+        
+        # Title
+        title = tk.Label(main_frame, text="Chat Client", font=('Arial', 16, 'bold'))
+        title.pack(pady=(0, 20))
+        
+        # Username section
+        tk.Label(main_frame, text="Username").pack()
+        self.username_entry = tk.Entry(main_frame)
         self.username_entry.pack()
+        self.username_error = tk.Label(main_frame, text="", fg='red', font=('Arial', 8))
+        self.username_error.pack()
         
-        tk.Label(self.root, text="Password").pack()
-        self.password_entry = tk.Entry(self.root, show="*")
+        # Password section
+        tk.Label(main_frame, text="Password").pack()
+        self.password_entry = tk.Entry(main_frame, show="*")
         self.password_entry.pack()
+        self.password_error = tk.Label(main_frame, text="", fg='red', font=('Arial', 8))
+        self.password_error.pack()
         
-        tk.Button(self.root, text="Login", command=self.login).pack()
-        tk.Button(self.root, text="Register", command=self.register).pack()
+        # Requirements info
+        requirements = (
+            "Username requirements:\n"
+            "• Only letters and numbers\n"
+            "• No spaces\n"
+            "• 3-20 characters\n\n"
+            "Password requirements:\n"
+            "• At least 8 characters\n"
+            "• At least one number\n"
+            "• At least one uppercase letter\n"
+            "• No spaces"
+        )
+        tk.Label(main_frame, text=requirements, justify=tk.LEFT, 
+                font=('Arial', 8), fg='gray').pack(pady=10)
+        
+        # Buttons
+        button_frame = tk.Frame(main_frame)
+        button_frame.pack(pady=10)
+        tk.Button(button_frame, text="Login", command=self.login).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Register", command=self.register).pack(side=tk.LEFT, padx=5)
+
+    def validate_username(self, username):
+        """Validate username according to requirements"""
+        import re
+        if not 3 <= len(username) <= 20:
+            return False, "Username must be 3-20 characters long"
+        if not username.isalnum():
+            return False, "Username can only contain letters and numbers"
+        if ' ' in username:
+            return False, "Username cannot contain spaces"
+        return True, ""
+
+    def validate_password(self, password):
+        """Validate password according to requirements"""
+        if len(password) < 8:
+            return False, "Password must be at least 8 characters long"
+        if not any(c.isdigit() for c in password):
+            return False, "Password must contain at least one number"
+        if not any(c.isupper() for c in password):
+            return False, "Password must contain at least one uppercase letter"
+        if ' ' in password:
+            return False, "Password cannot contain spaces"
+        return True, ""
 
     def chat_screen(self):
         for widget in self.root.winfo_children():
@@ -108,6 +172,51 @@ class ClientApp:
         )
         delete_account_btn.pack(side=tk.BOTTOM, pady=10)
         
+        # Add stats frame above delete button
+        stats_frame = tk.Frame(sidebar, bg='#2f3136')
+        stats_frame.pack(side=tk.BOTTOM, fill='x', padx=5, pady=5)
+        
+        # Last log-off time label
+        self.log_off_label = tk.Label(
+            stats_frame, 
+            text="Last log-off: Never",
+            bg='#2f3136',
+            fg='white',
+            font=('Arial', 8),
+            wraplength=180
+        )
+        self.log_off_label.pack(fill='x', pady=2)
+        
+        # View count frame
+        view_count_frame = tk.Frame(stats_frame, bg='#2f3136')
+        view_count_frame.pack(fill='x')
+        
+        # View count label and entry
+        self.view_count_label = tk.Label(
+            view_count_frame,
+            text=f"View Count: {self.view_count}",
+            bg='#2f3136',
+            fg='white',
+            font=('Arial', 8)
+        )
+        self.view_count_label.pack(side=tk.LEFT, pady=2)
+        
+        # Update view count button
+        self.view_count_entry = tk.Entry(view_count_frame, width=5)
+        self.view_count_entry.pack(side=tk.LEFT, padx=5)
+        self.view_count_entry.insert(0, str(self.view_count))
+        
+        update_btn = tk.Button(
+            view_count_frame,
+            text="Update",
+            command=self.update_view_count,
+            bg='#5865f2',
+            fg='white',
+            font=('Arial', 8),
+            relief=tk.FLAT
+        )
+        update_btn.pack(side=tk.RIGHT)
+        
         # Chat area container
         chat_container = tk.Frame(main_container, bg='#36393f')
         chat_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -155,92 +264,264 @@ class ClientApp:
     def display_conversation(self, contact):
         self.chat_area.config(state='normal')
         self.chat_area.delete(1.0, tk.END)
+        
         if contact in self.messages_by_user:
-            for msg in self.messages_by_user[contact]:
-                # Create a frame for each message
-                msg_frame = tk.Frame(self.chat_area, bg='#36393f')
-                self.chat_area.window_create(tk.END, window=msg_frame)
+            messages = self.messages_by_user[contact]
+            
+            # Split messages into before and after last_log_off
+            messages_before = []
+            messages_after = []
+            
+            for msg in messages:
+                # Extract timestamp from message format "[2024-03-14 12:34:56] [sender -> receiver]: content"
+                msg_time_str = msg[1:20]
+                try:
+                    msg_time = datetime.strptime(msg_time_str, '%Y-%m-%d %H:%M:%S')
+                    
+                    if self.last_log_off is None or msg_time <= self.last_log_off:
+                        messages_before.append(msg)
+                    else:
+                        messages_after.append(msg)
+                except ValueError:
+                    # If there's any issue parsing the timestamp, treat as an old message
+                    messages_before.append(msg)
+            
+            # Display all messages before last_log_off
+            for msg in messages_before:
+                self.display_message(msg)
+            
+            # If there are messages after last_log_off
+            if messages_after:
+                # Add a visual separator
+                separator = tk.Frame(self.chat_area, height=2, bg='#5865f2')
+                self.chat_area.window_create(tk.END, window=separator, stretch=True)
+                self.chat_area.insert(tk.END, '\nNew messages since last login:\n\n')
                 
-                # Add message text
-                msg_label = tk.Label(msg_frame, text=msg, bg='#36393f', fg='white',
-                                   wraplength=500, justify=tk.LEFT)
-                msg_label.pack(side=tk.LEFT, pady=2)
-                
-                # Add delete button
-                delete_btn = tk.Button(
-                    msg_frame, 
-                    text="×", 
-                    bg='#36393f', 
-                    fg='#ff4444',
-                    font=('Arial', 8),
-                    relief=tk.FLAT,
-                    command=lambda m=msg: self.handle_delete_message(m, contact)
-                )
-                delete_btn.pack(side=tk.RIGHT, padx=5)
-                
-                self.chat_area.insert(tk.END, '\n')
+                # Display first batch of messages based on view_count
+                self.current_message_index = 0
+                self.remaining_messages = messages_after
+                self.display_next_batch()
+        
         self.chat_area.config(state='disabled')
         self.chat_area.see(tk.END)
+
+    def display_next_batch(self):
+        """Display next batch of messages based on view_count"""
+        if not hasattr(self, 'remaining_messages'):
+            return
+            
+        end_index = min(self.current_message_index + self.view_count, len(self.remaining_messages))
+        current_batch = self.remaining_messages[self.current_message_index:end_index]
+        
+        # Display current batch
+        for msg in current_batch:
+            self.display_message(msg)
+        
+        # Update current index
+        self.current_message_index = end_index
+        
+        # If there are more messages, show the "View More" button
+        if self.current_message_index < len(self.remaining_messages):
+            self.show_view_more_button()
+
+    def display_message(self, msg):
+        """Display a single message with delete button"""
+        msg_frame = tk.Frame(self.chat_area, bg='#36393f')
+        self.chat_area.window_create(tk.END, window=msg_frame)
+        
+        # Add message text
+        msg_label = tk.Label(msg_frame, text=msg, bg='#36393f', fg='white',
+                            wraplength=500, justify=tk.LEFT)
+        msg_label.pack(side=tk.LEFT, pady=2)
+        
+        # Add delete button
+        delete_btn = tk.Button(
+            msg_frame, 
+            text="×", 
+            bg='#36393f', 
+            fg='#ff4444',
+            font=('Arial', 8),
+            relief=tk.FLAT,
+            command=lambda m=msg: self.handle_delete_message(m, self.current_contact)
+        )
+        delete_btn.pack(side=tk.RIGHT, padx=5)
+        
+        self.chat_area.insert(tk.END, '\n')
+
+    def show_view_more_button(self):
+        """Create and display the View More button"""
+        remaining_count = len(self.remaining_messages) - self.current_message_index
+        
+        button_frame = tk.Frame(self.chat_area, bg='#36393f')
+        self.chat_area.window_create(tk.END, window=button_frame)
+        
+        view_more_btn = tk.Button(
+            button_frame,
+            text=f"View More ({remaining_count} messages remaining)",
+            command=self.display_next_batch,
+            bg='#5865f2',
+            fg='white',
+            relief=tk.FLAT,
+            font=('Arial', 10),
+            padx=10,
+            pady=5,
+            activebackground='#4752c4',
+            activeforeground='white'
+        )
+        view_more_btn.pack(pady=10)
+        
+        # Remove the old button before displaying new messages
+        def display_and_remove():
+            button_frame.destroy()
+            self.display_next_batch()
+        
+        view_more_btn.configure(command=display_and_remove)
+        self.chat_area.insert(tk.END, '\n')
 
     def update_contacts_list(self):
         self.contacts_list.delete(0, tk.END)
         for contact in sorted(self.messages_by_user.keys()):
             self.contacts_list.insert(tk.END, contact)
 
-    def serialize_message(self, msg_type, payload):
-        return struct.pack('!BI', ord(msg_type), len(payload)) + payload
+    def serialize_message(self, msg_type, lst):
+        return self.serialization_interface.serialize_message(msg_type, lst)
 
     def login(self):
         username = self.username_entry.get()
         password = self.password_entry.get()
         
-        payload = (
-            struct.pack('!H', len(username)) + username.encode() +
-            struct.pack('!H', len(password)) + password.encode()
-        )
-        self.client_socket.sendall(self.serialize_message('L', payload))
+        # Reset error messages
+        self.username_error.config(text="")
+        self.password_error.config(text="")
+        
+        # Validate inputs
+        username_valid, username_error = self.validate_username(username)
+        password_valid, password_error = self.validate_password(password)
+        
+        if not username_valid:
+            self.username_error.config(text=username_error)
+            return
+        if not password_valid:
+            self.password_error.config(text=password_error)
+            return
+        
+        # Proceed with login
+        self.client_socket.sendall(self.serialize_message('L', [username, password]))
         
         # Get response
-        header = self.read_exact(5)
-        if not header:
-            messagebox.showerror("Error", "Connection closed")
-            return
-            
-        msg_type, payload_len = struct.unpack('!BI', header)
-        payload = self.read_exact(payload_len)
-        print(f"payload: {payload}")
-        
-        if chr(msg_type) == 'S':
-            self.username = username
-            messagebox.showinfo("Success", payload.decode())
-            self.request_user_list()
-            self.chat_screen()
-            
+        if self.is_json:
+            response = self.read_json_response()
+            if response[0]['type'] == 'S':
+                self.username = username
+                messagebox.showinfo("Success", response[0]['payload'])
+                self.request_user_list()
+                self.chat_screen()
+            else:
+                messagebox.showerror("Error", response[0]['payload'])
         else:
-            messagebox.showerror("Error", payload.decode())
+            header = self.read_exact(5)
+            if not header:
+                messagebox.showerror("Error", "Connection closed")
+                return
+                
+            msg_type, payload_len = struct.unpack('!BI', header)
+            payload = self.read_exact(payload_len)
+            
+            if chr(msg_type) == 'S':
+                self.username = username
+                messagebox.showinfo("Success", payload.decode())
+                self.request_user_list()
+                self.chat_screen()
+            else:
+                messagebox.showerror("Error", payload.decode())
 
     def register(self):
         username = self.username_entry.get()
         password = self.password_entry.get()
         
-        payload = (
-            struct.pack('!H', len(username)) + username.encode() +
-            struct.pack('!H', len(password)) + password.encode()
-        )
-        self.client_socket.sendall(self.serialize_message('R', payload))
+        # Reset error messages
+        self.username_error.config(text="")
+        self.password_error.config(text="")
         
-        header = self.read_exact(5)
-        if not header:
-            messagebox.showerror("Error", "Connection closed")
+        # Validate inputs
+        username_valid, username_error = self.validate_username(username)
+        password_valid, password_error = self.validate_password(password)
+        
+        if not username_valid:
+            self.username_error.config(text=username_error)
             return
-            
-        msg_type, payload_len = struct.unpack('!BI', header)
-        payload = self.read_exact(payload_len)
+        if not password_valid:
+            self.password_error.config(text=password_error)
+            return
         
-        if chr(msg_type) == 'S':
-            messagebox.showinfo("Success", payload.decode())
+        # Proceed with registration
+        self.client_socket.sendall(self.serialize_message('R', [username, password]))
+        
+        # Get response
+        if self.is_json:
+            response = self.read_json_response()
+            if response[0]['type'] == 'S':
+                messagebox.showinfo("Success", response[0]['payload'])
+            else:
+                messagebox.showerror("Error", response[0]['payload'])
         else:
-            messagebox.showerror("Error", payload.decode())
+            header = self.read_exact(5)
+            if not header:
+                messagebox.showerror("Error", "Connection closed")
+                return
+                
+            msg_type, payload_len = struct.unpack('!BI', header)
+            payload = self.read_exact(payload_len)
+            
+            if chr(msg_type) == 'S':
+                messagebox.showinfo("Success", payload.decode())
+            else:
+                messagebox.showerror("Error", payload.decode())
+
+    def read_json_response(self) -> list:
+        """Read complete JSON responses from the socket"""
+        buffer = b''
+        messages = []
+        
+        while True:
+            chunk = self.client_socket.recv(4096)
+            if not chunk:
+                return None
+            
+            buffer += chunk
+            try:
+                # Try to find complete JSON messages
+                decoded = buffer.decode('utf-8')
+                depth = 0
+                start = 0
+                
+                for i, char in enumerate(decoded):
+                    if char == '{':
+                        if depth == 0:
+                            start = i
+                        depth += 1
+                    elif char == '}':
+                        depth -= 1
+                        if depth == 0:
+                            # Found a complete JSON message
+                            message = decoded[start:i+1]
+                            messages.append(json.loads(message))
+                            # Move start past this message
+                            start = i + 1
+                
+                # Keep any incomplete message in buffer
+                if start < len(decoded):
+                    buffer = decoded[start:].encode('utf-8')
+                else:
+                    buffer = b''
+                
+                # If we have any messages, return them
+                if messages:
+                    return messages
+                
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                # If we can't parse yet, keep reading
+                continue
 
     def send_message(self):
         if not hasattr(self, 'current_contact'):
@@ -252,77 +533,89 @@ class ClientApp:
             return
         
         recipient = self.current_contact
-        payload = (
-            struct.pack('!H', len(self.username)) + self.username.encode() +
-            struct.pack('!H', len(recipient)) + recipient.encode() +
-            struct.pack('!I', len(message)) + message.encode()
-        )
-        
-        self.client_socket.sendall(self.serialize_message('M', payload))
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        self.client_socket.sendall(self.serialize_message('M', [self.username, recipient, message]))
 
         # Add message to chat area immediately
         self.chat_area.config(state='normal')
-        self.chat_area.insert(tk.END, f"[{self.username}]: {message}\n")
+        formatted_message = f"[{timestamp}] [{self.username} -> {recipient}]: {message}"
+        self.chat_area.insert(tk.END, formatted_message + '\n')
         self.chat_area.see(tk.END)  # Scroll to bottom
         self.chat_area.config(state='disabled')
 
         # Store message in history
         if recipient not in self.messages_by_user:
             self.messages_by_user[recipient] = []
-        self.messages_by_user[recipient].append(f"[{self.username}]: {message}")
+        self.messages_by_user[recipient].append(formatted_message)
         
         self.message_entry.delete(0, tk.END)
 
     def receive_messages(self):
+        """Handle incoming messages from server"""
         while True:
             try:
-                header = self.read_exact(5)
-                if not header:
-                    break
-                msg_type, payload_len = struct.unpack('!BI', header)
-                payload = self.read_exact(payload_len)
                 
-                if chr(msg_type) == 'M':
-                    offset = 0
-                    sender_len = struct.unpack_from('!H', payload, offset)[0]
-                    offset += 2
-                    sender = payload[offset:offset+sender_len].decode()
-                    offset += sender_len
-                    recipient_len = struct.unpack_from('!H', payload, offset)[0]
-                    offset += 2
-                    recipient = payload[offset:offset+recipient_len].decode()
-                    offset += recipient_len
-                    msg_len = struct.unpack_from('!I', payload, offset)[0]
-                    offset += 4
-                    msg_content = payload[offset:offset+msg_len].decode()
-                    
-                    self.chat_area.config(state='normal')
-                    self.chat_area.insert(tk.END, f"[{sender}]: {msg_content}\n")
-                    self.chat_area.config(state='disabled')
-
-                    self.animate_message()
-
-                elif chr(msg_type) == 'B':  # Bulk message delivery (stored messages)
-                    self.handle_bulk_messages(payload)
-                
-                elif chr(msg_type) == 'U':  # User list
-                    print(f"User list: {payload}")
-                    self.handle_user_list(payload)
-
-                elif chr(msg_type) == 'S':  # For delete confirmation
-                    success = payload.decode() == "Message deleted"
-                    if success:
-                        messagebox.showinfo("Success", "Message deleted successfully")
-                    elif payload.decode() == "User deleted successfully":
-                        messagebox.showinfo("Success", "Account deleted successfully")
-                        self.root.after(0, self.login_screen)  # Return to login screen
-                        break  # Exit the receive loop
-                    else:
-                        messagebox.showerror("Error", "Failed to execute action")
+                if self.is_json:
+                    responses = self.read_json_response()
+                    for response in responses:
+                        msg_type = response['type']
+                        payload = response['payload']
+                        print(f"Received JSON response - Type: {msg_type}")
+                        print(f"Payload: {payload}")
+                        if not self.receive_message_helper(msg_type, payload):
+                            return
+                else:
+                    header = self.read_exact(5)
+                    if not header:
+                        break
+                    b_msg_type, payload_len = struct.unpack('!BI', header)
+                    msg_type = chr(b_msg_type)
+                    payload = self.read_exact(payload_len)
+                    if not self.receive_message_helper(msg_type, payload):
+                        return
 
             except Exception as e:
                 print(f"Receive error: {e}")
                 break
+    
+    def receive_message_helper(self, msg_type, payload) -> bool:
+        if msg_type == 'M':
+            sender, recipient, msg_content = self.serialization_interface.deserialize_message(payload)
+            self.chat_area.config(state='normal')
+            self.chat_area.insert(tk.END, f"[{sender}]: {msg_content}\n")
+            self.chat_area.config(state='disabled')
+
+            self.animate_message()
+
+        elif msg_type == 'B':  # Bulk message delivery (stored messages)
+            self.handle_bulk_messages(payload)
+        
+        elif msg_type == 'U':  # User list
+            print(f"User list: {payload}")
+            self.handle_user_list(payload)
+
+        elif msg_type == 'V':  # User stats
+            time_str, view_count = self.serialization_interface.deserialize_user_stats(payload)
+            self.view_count = view_count
+            if time_str == "None":
+                self.last_log_off = None
+            else:
+                self.last_log_off = datetime.fromisoformat(time_str)
+            
+            # Update the UI
+            self.update_stats_display()
+
+        elif msg_type == 'S':  # For delete confirmation
+            if self.serialization_interface.deserialize_success(payload) == "Message deleted":
+                messagebox.showinfo("Success", "Message deleted successfully")
+            elif self.serialization_interface.deserialize_success(payload) == "User deleted successfully":
+                messagebox.showinfo("Success", "Account deleted successfully")
+                self.root.after(0, self.login_screen)  # Return to login screen
+                return False # Exit the receive loop
+            elif self.serialization_interface.deserialize_success(payload) == "View count updated":
+                messagebox.showinfo("Success", "View count updated successfully")
+        
+        return True
     
     def animate_message(self):
         self.chat_area.config(state='normal')
@@ -370,47 +663,8 @@ class ClientApp:
     def handle_bulk_messages(self, payload):
         """Handle bulk message delivery (stored messages)."""
         try:
-            messages_to_process = []
-            offset = 0
-            while offset < len(payload):
-                # Read the length of the packed message
-                msg_len = struct.unpack_from('!I', payload, offset)[0]
-                offset += 4
-
-                # Extract the packed message
-                msg_data = payload[offset:offset + msg_len]
-                offset += msg_len
-
-                # Deserialize individual fields from the packed message
-                sender_len = struct.unpack_from('!H', msg_data, 0)[0]
-                sender = msg_data[2:2 + sender_len].decode()
-
-                receiver_len_offset = 2 + sender_len
-                receiver_len = struct.unpack_from('!H', msg_data, receiver_len_offset)[0]
-                receiver = msg_data[receiver_len_offset + 2:receiver_len_offset + 2 + receiver_len].decode()
-
-                content_offset = receiver_len_offset + 2 + receiver_len
-                content_len = struct.unpack_from('!I', msg_data, content_offset)[0]
-                content = msg_data[content_offset + 4:content_offset + 4 + content_len].decode()
-
-                timestamp_offset = content_offset + 4 + content_len
-                timestamp = struct.unpack_from('!I', msg_data, timestamp_offset)[0]
-
-                # Convert timestamp to a human-readable format
-                from datetime import datetime
-                readable_timestamp = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
-
-                # Store message by user
-                other_user = sender if sender != self.username else receiver
-                if other_user not in self.messages_by_user:
-                    self.messages_by_user[other_user] = []
-                
-                msg_text = f"[{readable_timestamp}] [{sender} -> {receiver}]: {content}"
-                self.messages_by_user[other_user].append(msg_text)
-                messages_to_process.append((other_user, msg_text))
-            
             # Update UI on main thread
-            self.root.after(0, self.update_chat_with_messages, messages_to_process)
+            self.root.after(0, self.update_chat_with_messages, self.serialization_interface.deserialize_bulk_messages(payload, self.username, self.messages_by_user))
             
         except Exception as e:
             print(f"Error handling bulk messages: {e}")
@@ -424,25 +678,14 @@ class ClientApp:
 
     def request_user_list(self):
         """Request the list of all users from the server"""
-        msg_type = 'G'
-        payload = b''  # Empty payload for this request
-        header = struct.pack('!BI', ord(msg_type), len(payload))
-        self.client_socket.sendall(header + payload)
+        self.client_socket.sendall(self.serialization_interface.serialize_user_list())
     
     def handle_user_list(self, payload: bytes) -> list:
         """
         Deserialize the user list from the server response
         Returns a list of usernames
         """
-        self.user_list = []  # Reset the list first
-        offset = 0
-        while offset < len(payload):
-            username_len = struct.unpack('!H', payload[offset:offset + 2])[0]
-            offset += 2
-            username = payload[offset:offset + username_len].decode('utf-8')
-            offset += username_len
-            self.user_list.append(username)
-        print(f"User list: {self.user_list}")
+        self.user_list = self.serialization_interface.deserialize_user_list(payload)
         
         # Update the combobox with new user list
         if hasattr(self, 'user_search'):
@@ -490,19 +733,11 @@ class ClientApp:
 
     def delete_message(self, message_content, timestamp, sender, receiver):
         """Serialize and send a delete message request"""
-        payload = (
-            struct.pack('!H', len(message_content)) + message_content.encode() +
-            timestamp.encode() +
-            struct.pack('!H', len(sender)) + sender.encode() +
-            struct.pack('!H', len(receiver)) + receiver.encode()
-        )
-        self.client_socket.sendall(self.serialize_message('D', payload))
+        self.client_socket.sendall(self.serialize_message('D', [message_content, timestamp, sender, receiver]))
 
     def handle_delete_message(self, message, contact):
         """Handle the deletion of a message"""
         if messagebox.askyesno("Delete Message", "Are you sure you want to delete this message?"):
-            # Extract timestamp and content from the message
-            # Example message format: "[2024-03-14 12:34:56] [sender -> receiver]: content"
             try:
                 timestamp = message[1:20]  # Extract timestamp
                 content_start = message.index(']:') + 3
@@ -511,10 +746,17 @@ class ClientApp:
                 # Send delete request
                 self.delete_message(content, timestamp, self.username, contact)
                 
-                # Remove from local storage and refresh display
+                # Remove from local storage
                 if contact in self.messages_by_user:
+                    # Remove the message
                     self.messages_by_user[contact].remove(message)
+                    
+                    # Refresh display
+                    self.chat_area.config(state='normal')
+                    self.chat_area.delete(1.0, tk.END)
+                    # Don't reset current_message_index here
                     self.display_conversation(contact)
+                    
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to delete message: {e}")
 
@@ -522,9 +764,29 @@ class ClientApp:
         """Send a request to delete the current user's account"""
         if messagebox.askyesno("Delete Account", 
                               "Are you sure you want to delete your account? This cannot be undone."):
-            payload = struct.pack('!H', len(self.username)) + self.username.encode()
-            self.client_socket.sendall(self.serialize_message('U', payload))
+            self.client_socket.sendall(self.serialize_message('U', [self.username]))
+
+    def update_view_count(self):
+        try:
+            new_count = int(self.view_count_entry.get())
+            if new_count < 0:
+                messagebox.showerror("Error", "View count must be positive")
+                return
+            self.client_socket.sendall(self.serialize_message('W', [self.username, new_count]))
+        except ValueError:
+            messagebox.showerror("Error", "Please enter a valid number")
+
+    def update_stats_display(self):
+        """Update the stats labels with current values"""
+        if hasattr(self, 'log_off_label'):
+            log_off_text = f"Last log-off: {self.last_log_off or 'Never'}"
+            self.log_off_label.config(text=log_off_text)
+        
+        if hasattr(self, 'view_count_label'):
+            self.view_count_label.config(text=f"View Count: {self.view_count}")
 
 if __name__ == "__main__":
-    app = ClientApp()
+    wire_protocol = ClientWireProtocol()
+    json_protocol = ClientJsonProtocol()
+    app = ClientApp(wire_protocol) # change protocol here
     app.root.mainloop()

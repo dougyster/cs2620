@@ -1,6 +1,6 @@
 import sys
 import os
-import bcrypt  # Add this import at the top
+import bcrypt
 
 # Add the parent directory to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -21,7 +21,8 @@ class BusinessLogic(BusinessLogicInterface):
         user_data = {
             "user_name": user_name,
             "user_password": hashed_password,  # Store the hashed password
-            "view_count": 5 # default view count of 5
+            "view_count": 5, # default view count of 5
+            "log_off_time": None # default log off time of None
         }
 
         print(f"Inserting user: {user_data}")
@@ -40,11 +41,16 @@ class BusinessLogic(BusinessLogicInterface):
 
     def get_user(self, user_name) -> dict:
         query = {"user_name": user_name}
-        return self.db_operations.read("users", query) or {}
+        user_docs = self.db_operations.read("users", query)
+        # Return the first user document if found, otherwise empty dict
+        print(f"Getting user document: {user_docs}")
+        return user_docs[0] if user_docs else {}
     
     def get_all_users(self) -> list:
         docs = self.db_operations.read("users", {}) or []
-        return [doc["user_name"] for doc in docs]
+        user_list = [doc["user_name"] for doc in docs]
+        print(f"User list: {user_list}")
+        return user_list
     
     def login_user(self, user_name, user_password) -> bool:
         print(f"Logging in user: {user_name}")  # Removed password from print for security
@@ -113,8 +119,10 @@ class BusinessLogic(BusinessLogicInterface):
     def delete_message(self, message:str, timestamp:str, sender:str, receiver:str) -> bool:
         from datetime import datetime
         try:
+            print(f"Deleting message: {message} from {sender} to {receiver} at {timestamp}")
             # Parse the timestamp string to datetime
             timestamp_dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+            print(f"Timestamp datetime: {timestamp_dt}")
             
             # Create a query with timestamp range to account for millisecond differences
             # This will match messages within the same second
@@ -131,6 +139,8 @@ class BusinessLogic(BusinessLogicInterface):
                     "$lt": end_time
                 }
             }
+
+            print(f"Query: {query}")
             
             result = self.db_operations.delete("messages", query)
             if result is not None and result > 0:
@@ -143,13 +153,30 @@ class BusinessLogic(BusinessLogicInterface):
             print(f"Error deleting message: {e}")
             return False
         
-    def update_view_count(self, view_count, user_email) -> bool:
-        query = {"user_email": user_email}
+    def update_view_count(self, view_count, username) -> bool:
+        query = {"user_name": username}
         update_values = {"view_count": view_count}
         try:
             result = self.db_operations.update("users", query, update_values)
-            return result is not None and result > 0
-        except Exception:
+            if result is not None and result > 0:
+                print(f"View count updated for user: {username}")
+                return True
+            else:
+                print(f"View count update failed for user: {username}")
+                return False
+        except Exception as e:
+            print(f"Error updating view count: {e}")
+            return False
+        
+    def update_log_off_time(self, user_name) -> bool:
+        query = {"user_name": user_name}
+        update_values = {"log_off_time": datetime.now()}
+        result = self.db_operations.update("users", query, update_values)
+        if result is not None and result > 0:
+            print(f"Log off time updated for user: {user_name}")
+            return True
+        else:
+            print(f"Log off time update failed for user: {user_name}")
             return False
         
 if __name__ == "__main__":

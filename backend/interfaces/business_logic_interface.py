@@ -45,3 +45,8 @@ class BusinessLogicInterface(ABC):
     def update_view_count(self, view_count, user_email) -> bool:
         """Update the view count for a specified user."""
         pass
+
+    @abstractmethod
+    def update_log_off_time(self, user_name) -> bool:
+        """Update the log off time for a specified user."""
+        pass
