@@ -5,18 +5,29 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from datetime import datetime
 import json
-
-from client_wire_protocol import ClientWireProtocol
-from client_json_protocol import ClientJsonProtocol
-from client_serialization_interface import ClientSerializationInterface
+import sys
 import os
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))) # add parent directory to python path
+
+from protocol.client_wire_protocol import ClientWireProtocol
+from protocol.client_json_protocol import ClientJsonProtocol
+from interfaces.client_serialization_interface import ClientSerializationInterface
+from interfaces.client_communication_interface import ClientCommunicationInterface
+import os
+
+from network.client_socket_handler import ClientSocketHandler
+from network.client_rpc_handler import ClientRpcHandler
+
 class ClientApp:
-    def __init__(self, serialization_interface: ClientSerializationInterface):
-        self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        host = os.getenv('CHAT_APP_HOST', '0.0.0.0')  # Default to 0.0.0.0
-        port = int(os.getenv('CHAT_APP_PORT', '8081'))  # Default to 8081
-        self.client_socket.connect((host, port))
+    def __init__(self, serialization_interface: ClientSerializationInterface, communication_interface: ClientCommunicationInterface):
+        # Choose communication handler based on protocol
+        self.comm_handler = communication_interface
+        
+        host = os.getenv('CHAT_APP_HOST', '0.0.0.0')
+        port = int(os.getenv('CHAT_APP_PORT', '8081'))
+        self.comm_handler.start_server(host, port)
+        
         self.username = ""
         self.root = tk.Tk()
         self.root.title("Chat Client")
@@ -30,7 +41,7 @@ class ClientApp:
     def read_exact(self, n):
         data = b''
         while len(data) < n:
-            packet = self.client_socket.recv(n - len(data))
+            packet = self.comm_handler.get_message(n - len(data))
             if not packet:
                 return None
             data += packet
@@ -411,7 +422,7 @@ class ClientApp:
         data = self.serialize_message('L', [username, password])
         print(f"Sending login: {len(data)} bytes")  
         # Proceed with login
-        self.client_socket.sendall(data)
+        self.comm_handler.send_message(data)
         
         # Get response
         if self.is_json:
@@ -460,7 +471,7 @@ class ClientApp:
             return
         
         # Proceed with registration
-        self.client_socket.sendall(self.serialize_message('R', [username, password]))
+        self.comm_handler.send_message(self.serialize_message('R', [username, password]))
         
         # Get response
         if self.is_json:
@@ -489,7 +500,7 @@ class ClientApp:
         messages = []
         
         while True:
-            chunk = self.client_socket.recv(4096)
+            chunk = self.comm_handler.get_message(4096)
             if not chunk:
                 return None
             
@@ -541,7 +552,7 @@ class ClientApp:
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         data = self.serialize_message('M', [self.username, recipient, message])
         print(f"Sending message: {len(data)} bytes")
-        self.client_socket.sendall(data)
+        response = self.comm_handler.send_message(data)
 
         # Add message to chat area immediately
         self.chat_area.config(state='normal')
@@ -558,32 +569,34 @@ class ClientApp:
         self.message_entry.delete(0, tk.END)
 
     def receive_messages(self):
-        """Handle incoming messages from server"""
-        while True:
-            try:
-                
-                if self.is_json:
-                    responses = self.read_json_response()
-                    for response in responses:
-                        msg_type = response['type']
-                        payload = response['payload']
-                        print(f"Received JSON response - Type: {msg_type}")
-                        print(f"Payload: {payload}")
+        """Register callback for receiving messages"""
+        if isinstance(self.comm_handler, ClientSocketHandler):
+            print("using socket handler")
+            while True:
+                try:
+                    if self.is_json:
+                        responses = self.read_json_response()
+                        for response in responses:
+                            msg_type = response['type']
+                            payload = response['payload']
+                            print(f"Received JSON response - Type: {msg_type}")
+                            print(f"Payload: {payload}")
+                            if not self.receive_message_helper(msg_type, payload):
+                                return
+                    else:
+                        header = self.read_exact(5)
+                        if not header:
+                            return
+                        b_msg_type, payload_len = struct.unpack('!BI', header)
+                        msg_type = chr(b_msg_type)
+                        payload = self.read_exact(payload_len)
                         if not self.receive_message_helper(msg_type, payload):
                             return
-                else:
-                    header = self.read_exact(5)
-                    if not header:
-                        break
-                    b_msg_type, payload_len = struct.unpack('!BI', header)
-                    msg_type = chr(b_msg_type)
-                    payload = self.read_exact(payload_len)
-                    if not self.receive_message_helper(msg_type, payload):
-                        return
-
-            except Exception as e:
-                print(f"Receive error: {e}")
-                break
+                except Exception as e:
+                    print(f"Receive error: {e}")
+                    break
+        elif isinstance(self.comm_handler, ClientRpcHandler):
+            print("not handling rpc atm")
     
     def receive_message_helper(self, msg_type, payload) -> bool:
         if msg_type == 'M':
@@ -685,7 +698,7 @@ class ClientApp:
 
     def request_user_list(self):
         """Request the list of all users from the server"""
-        self.client_socket.sendall(self.serialization_interface.serialize_user_list())
+        self.comm_handler.send_message(self.serialization_interface.serialize_user_list())
     
     def handle_user_list(self, payload: bytes) -> list:
         """
@@ -740,7 +753,7 @@ class ClientApp:
 
     def delete_message(self, message_content, timestamp, sender, receiver):
         """Serialize and send a delete message request"""
-        self.client_socket.sendall(self.serialize_message('D', [message_content, timestamp, sender, receiver]))
+        self.comm_handler.send_message(self.serialize_message('D', [message_content, timestamp, sender, receiver]))
 
     def handle_delete_message(self, message, contact):
         """Handle the deletion of a message"""
@@ -751,7 +764,7 @@ class ClientApp:
                 content = message[content_start:].strip()
                 
                 # Send delete request
-                self.delete_message(content, timestamp, self.username, contact)
+                self.delete_message(content, timestamp, self.username, contact) # check this lol
                 
                 # Remove from local storage
                 if contact in self.messages_by_user:
@@ -771,7 +784,7 @@ class ClientApp:
         """Send a request to delete the current user's account"""
         if messagebox.askyesno("Delete Account", 
                               "Are you sure you want to delete your account? This cannot be undone."):
-            self.client_socket.sendall(self.serialize_message('U', [self.username]))
+            self.comm_handler.send_message(self.serialize_message('U', [self.username]))
 
     def update_view_count(self):
         try:
@@ -779,7 +792,7 @@ class ClientApp:
             if new_count < 0:
                 messagebox.showerror("Error", "View count must be positive")
                 return
-            self.client_socket.sendall(self.serialize_message('W', [self.username, new_count]))
+            self.comm_handler.send_message(self.serialize_message('W', [self.username, new_count]))
         except ValueError:
             messagebox.showerror("Error", "Please enter a valid number")
 
@@ -793,9 +806,15 @@ class ClientApp:
             self.view_count_label.config(text=f"View Count: {self.view_count}")
 
 if __name__ == "__main__":
+
+    # protocol choice
     wire_protocol = ClientWireProtocol()
     json_protocol = ClientJsonProtocol()
+
+    # communication choice
+    socket_handler = ClientSocketHandler()
+    rpc_handler = ClientRpcHandler()
     
     # Choose which protocol to use 
-    app = ClientApp(json_protocol) # change protocol here
+    app = ClientApp(json_protocol, socket_handler) # change protocol here
     app.root.mainloop()
