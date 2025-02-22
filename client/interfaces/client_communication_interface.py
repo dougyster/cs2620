@@ -13,7 +13,7 @@ class ClientCommunicationInterface(ABC):
         pass
     
     @abstractmethod
-    def send_message(self, message: bytes) -> bytes:
+    def send_message(self, message: bytes) -> any:
         """Send a message and get response"""
         pass
     

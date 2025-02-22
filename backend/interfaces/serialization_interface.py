@@ -4,7 +4,9 @@ from typing import Tuple, List, Dict, Any
 class SerializationInterface(ABC):
     # Serialization methods
     @abstractmethod
-    def serialize_success(self, message: str) -> bytes:
+    def serialize_success(self, message: any) -> bytes:
+        # dict for rpc
+        # string for json and wire
         pass
     
     @abstractmethod

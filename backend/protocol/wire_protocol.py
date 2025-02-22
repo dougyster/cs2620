@@ -191,3 +191,10 @@ class WireProtocol(SerializationInterface):
         offset += username_len
         new_count = struct.unpack_from('!I', payload, offset)[0]
         return username, new_count
+    
+    def deserialize_log_off(self, payload: bytes) -> str:
+        offset = 0
+        username_len = struct.unpack_from('!H', payload, offset)[0]
+        offset += 2
+        username = payload[offset:offset+username_len].decode()
+        return username

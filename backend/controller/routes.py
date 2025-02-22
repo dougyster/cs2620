@@ -3,6 +3,7 @@ import os
 import struct
 import threading
 import json
+from enum import Enum
 
 # Add the parent directory to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -24,6 +25,11 @@ import socket
 from backend.socket.socket_handler import SocketHandler
 from backend.socket.rpc_handler import RpcHandler
 
+class ProtocolType(Enum):
+    WIRE = "wire"
+    JSON = "json"
+    RPC = "rpc"
+
 class Controller:
     def __init__(self, business_logic: BusinessLogicInterface, wire_protocol: SerializationInterface):
         self.business_logic = business_logic
@@ -31,17 +37,26 @@ class Controller:
         self.online_users = {}  # Track online users {username: client_socket}
         self.lock = threading.Lock()  # For thread-safe operations
 
-    def handle_incoming_message(self, data: bytes, is_json: bool, client_socket: socket.socket=None):
+    def handle_incoming_message(self, data: bytes, protocol_type: ProtocolType, client_socket: socket.socket=None):
         print(f"Received data: {data}")
         print(f"Client socket: {client_socket}")
+        print(f"Protocol type: {protocol_type}")
         
         try:
-            if is_json:
+            if protocol_type == ProtocolType.RPC:
+                # For RPC, extract from params
+                json_data = json.loads(data.decode('utf-8'))
+                params = json_data.get('params', {})
+                msg_type = params.get('type')
+                payload = params  # The entire params object is our payload
+            
+            elif protocol_type == ProtocolType.JSON:
                 # For JSON, decode the entire message
                 json_data = json.loads(data.decode('utf-8'))
                 msg_type = json_data['type']
                 payload = json_data['payload']
-            else:
+            
+            else:  # WIRE protocol
                 # For wire protocol, use existing header parsing
                 header = data[:5]
                 msg_type_code, payload_len = struct.unpack('!BI', header)
@@ -59,28 +74,46 @@ class Controller:
                 
             elif msg_type == 'L':  # Login
                 username, password = self.wire_protocol.deserialize_login(payload)
-                    
                 maybe_success = self.business_logic.login_user(username, password)
-                if client_socket:
-                    self.online_users[username] = client_socket
                 
-                if maybe_success:
-                    messages = self.business_logic.get_messages(username)
-                    user = self.business_logic.get_user(username)
-                    
+                if protocol_type == ProtocolType.RPC:
+                    if maybe_success:
+                        messages = self.business_logic.get_messages(username)
+                        user = self.business_logic.get_user(username)
+                        
+                        # Format response with operation codes
+                        response_data = {
+                            # Success message
+                            "S": "Login successful",
+                            # Bulk messages
+                            "B": self.wire_protocol.serialize_all_messages(messages),
+                            # User stats
+                            "V": self.wire_protocol.serialize_user_stats(user.get('log_off_time'), user.get('view_count', 5))
+                        }
+                        return self.wire_protocol.serialize_success(response_data)
+                    else:
+                        return self.wire_protocol.serialize_error("Login failed")
+                
+                else: # for json and wire protocol
                     if client_socket:
-                        client_socket.sendall(self.wire_protocol.serialize_success("Login successful"))
-                    if messages:
-                        serialized_messages = self.wire_protocol.serialize_all_messages(messages)
-                        print(f"Sending messages: {len(serialized_messages)} bytes")  
-                        if client_socket:
-                            client_socket.sendall(serialized_messages)
+                        self.online_users[username] = client_socket
                     
-                    log_off_time = user.get('log_off_time')
-                    view_count = user.get('view_count', 5)
-                    return self.wire_protocol.serialize_user_stats(log_off_time, view_count)
-                else:
-                    return self.wire_protocol.serialize_error("Login failed")
+                    if maybe_success:
+                        messages = self.business_logic.get_messages(username)
+                        user = self.business_logic.get_user(username)
+                        
+                        if client_socket:
+                            client_socket.sendall(self.wire_protocol.serialize_success("Login successful"))
+                        if messages:
+                            serialized_messages = self.wire_protocol.serialize_all_messages(messages)
+                            if client_socket:
+                                client_socket.sendall(serialized_messages)
+                        
+                        log_off_time = user.get('log_off_time')
+                        view_count = user.get('view_count', 5)
+                        return self.wire_protocol.serialize_user_stats(log_off_time, view_count)
+                    else:
+                        return self.wire_protocol.serialize_error("Login failed")
                 
             elif msg_type == 'M':  # Message
                 sender, recipient, msg_content = self.wire_protocol.deserialize_message(payload)
@@ -127,7 +160,14 @@ class Controller:
                     return self.wire_protocol.serialize_success("View count updated")
                 else:
                     return self.wire_protocol.serialize_error("Failed to update view count")
+            elif msg_type == 'O':  # Log off
+                username = self.wire_protocol.deserialize_log_off(payload)
                 
+                success = self.business_logic.update_log_off_time(username)
+                if success:
+                    return self.wire_protocol.serialize_success("Log off time updated")
+                else:
+                    return self.wire_protocol.serialize_error("Failed to update log off time")
             else:
                 return self.wire_protocol.serialize_error("Invalid message type")
                 
@@ -147,8 +187,10 @@ def start_server():
     json_protocol = JsonProtocol()
     rpc_protocol = RpcProtocol()
     
-    protocol_of_choice = json_protocol
-    is_json = isinstance(protocol_of_choice, (JsonProtocol, RpcProtocol))
+    protocol_of_choice = rpc_protocol
+    protocol_type = (ProtocolType.RPC if isinstance(protocol_of_choice, RpcProtocol)
+                    else ProtocolType.JSON if isinstance(protocol_of_choice, JsonProtocol)
+                    else ProtocolType.WIRE)
     
     # Choose communication handler based on protocol
     if isinstance(protocol_of_choice, RpcProtocol):
@@ -167,8 +209,9 @@ def start_server():
         comm_handler.start_server(
             host, 
             port, 
-            lambda data, client: controller.handle_incoming_message(data, is_json, client)
+            lambda data, client: controller.handle_incoming_message(data, protocol_type, client)
         )
+        threading.Event().wait() # force main thread to block indefinitely
     except KeyboardInterrupt:
         print("\nShutting down server...")
         comm_handler.stop_server()

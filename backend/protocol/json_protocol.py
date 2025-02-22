@@ -94,6 +94,9 @@ class JsonProtocol(SerializationInterface):
     def deserialize_view_count_update(self, payload: list) -> tuple[str, int]:
         print(f"Deserialized json view count update: {payload}")
         return payload.get("username"), payload.get("new_count")
+    
+    def deserialize_log_off(self, payload: list) -> str:
+        return payload.get("username")
 
     
     

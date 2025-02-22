@@ -10,14 +10,24 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))) # add parent directory to python path
 
-from protocol.client_wire_protocol import ClientWireProtocol
-from protocol.client_json_protocol import ClientJsonProtocol
 from interfaces.client_serialization_interface import ClientSerializationInterface
 from interfaces.client_communication_interface import ClientCommunicationInterface
-import os
 
+# import protocols
+from protocol.client_wire_protocol import ClientWireProtocol
+from protocol.client_json_protocol import ClientJsonProtocol
+from protocol.client_rpc_protocol import ClientRpcProtocol
+
+# import handlers
 from network.client_socket_handler import ClientSocketHandler
 from network.client_rpc_handler import ClientRpcHandler
+
+from enum import Enum
+
+class ProtocolType(Enum):
+    WIRE = "wire"
+    JSON = "json"
+    RPC = "rpc"
 
 class ClientApp:
     def __init__(self, serialization_interface: ClientSerializationInterface, communication_interface: ClientCommunicationInterface):
@@ -31,8 +41,10 @@ class ClientApp:
         self.username = ""
         self.root = tk.Tk()
         self.root.title("Chat Client")
+        # Add protocol for window close
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.serialization_interface = serialization_interface
-        self.is_json = isinstance(serialization_interface, ClientJsonProtocol)
+        self.protocol_type = ProtocolType.RPC if isinstance(serialization_interface, ClientRpcProtocol) else ProtocolType.JSON if isinstance(serialization_interface, ClientJsonProtocol) else ProtocolType.WIRE
         self.login_screen()
         self.user_list = []
         self.last_log_off = None
@@ -265,7 +277,10 @@ class ClientApp:
         
         # Start receiving messages
         self.messages_by_user = {}  # Store messages by user
-        threading.Thread(target=self.receive_messages, daemon=True).start()
+        if self.protocol_type != ProtocolType.RPC:
+            threading.Thread(target=self.receive_messages, daemon=True).start()
+        else:
+            print(f"Using rpc so handling instantaneously")
 
     def on_contact_select(self, event):
         selection = self.contacts_list.curselection()
@@ -422,10 +437,21 @@ class ClientApp:
         data = self.serialize_message('L', [username, password])
         print(f"Sending login: {len(data)} bytes")  
         # Proceed with login
-        self.comm_handler.send_message(data)
-        
-        # Get response
-        if self.is_json:
+        if self.protocol_type == ProtocolType.RPC:
+            response = self.comm_handler.send_message(data)
+            if 'S' in response:
+                self.username = username
+                messagebox.showinfo("Success", response['S'])
+                self.request_user_list()
+                self.chat_screen()
+                del response['S']
+                for msg_type, payload in response.items():
+                    print(f"Received message: {msg_type} with payload")
+                    self.receive_message_helper(msg_type, payload)
+            else:
+                messagebox.showerror("Error", response['message'])
+        elif self.protocol_type == ProtocolType.JSON:
+            self.comm_handler.send_message(data)
             response = self.read_json_response()
             if response[0]['type'] == 'S':
                 self.username = username
@@ -434,7 +460,8 @@ class ClientApp:
                 self.chat_screen()
             else:
                 messagebox.showerror("Error", response[0]['payload'])
-        else:
+        elif self.protocol_type == ProtocolType.WIRE:
+            self.comm_handler.send_message(data)
             header = self.read_exact(5)
             if not header:
                 messagebox.showerror("Error", "Connection closed")
@@ -469,18 +496,25 @@ class ClientApp:
         if not password_valid:
             self.password_error.config(text=password_error)
             return
+    
         
-        # Proceed with registration
-        self.comm_handler.send_message(self.serialize_message('R', [username, password]))
-        
-        # Get response
-        if self.is_json:
+        # Send registration request
+        if self.protocol_type == ProtocolType.RPC:
+            response = self.comm_handler.send_message(self.serialize_message('R', [username, password]))
+            print(f"Received response: {response}")
+            if 'S' in response:
+                messagebox.showinfo("Success", response['S'])
+            else:
+                messagebox.showerror("Error", response['message'])
+        elif self.protocol_type == ProtocolType.JSON:
+            self.comm_handler.send_message(self.serialize_message('R', [username, password]))
             response = self.read_json_response()
             if response[0]['type'] == 'S':
                 messagebox.showinfo("Success", response[0]['payload'])
             else:
                 messagebox.showerror("Error", response[0]['payload'])
-        else:
+        elif self.protocol_type == ProtocolType.WIRE:
+            self.comm_handler.send_message(self.serialize_message('R', [username, password]))
             header = self.read_exact(5)
             if not header:
                 messagebox.showerror("Error", "Connection closed")
@@ -574,7 +608,7 @@ class ClientApp:
             print("using socket handler")
             while True:
                 try:
-                    if self.is_json:
+                    if self.protocol_type == ProtocolType.JSON:
                         responses = self.read_json_response()
                         for response in responses:
                             msg_type = response['type']
@@ -583,7 +617,7 @@ class ClientApp:
                             print(f"Payload: {payload}")
                             if not self.receive_message_helper(msg_type, payload):
                                 return
-                    else:
+                    elif self.protocol_type == ProtocolType.WIRE:
                         header = self.read_exact(5)
                         if not header:
                             return
@@ -698,7 +732,12 @@ class ClientApp:
 
     def request_user_list(self):
         """Request the list of all users from the server"""
-        self.comm_handler.send_message(self.serialization_interface.serialize_user_list())
+        if self.protocol_type == ProtocolType.RPC:
+            response = self.comm_handler.send_message(self.serialization_interface.serialize_user_list())
+            print(f"Handling {response['type']} with payload")
+            self.receive_message_helper(response['type'], response['payload'])
+        else: # json and wire
+            self.comm_handler.send_message(self.serialization_interface.serialize_user_list())
     
     def handle_user_list(self, payload: bytes) -> list:
         """
@@ -753,7 +792,11 @@ class ClientApp:
 
     def delete_message(self, message_content, timestamp, sender, receiver):
         """Serialize and send a delete message request"""
-        self.comm_handler.send_message(self.serialize_message('D', [message_content, timestamp, sender, receiver]))
+        if self.protocol_type == ProtocolType.RPC:
+            response = self.comm_handler.send_message(self.serialize_message('D', [message_content, timestamp, sender, receiver]))
+            self.receive_message_helper(response['type'], response['payload'])
+        else: # json and wire
+            self.comm_handler.send_message(self.serialize_message('D', [message_content, timestamp, sender, receiver]))
 
     def handle_delete_message(self, message, contact):
         """Handle the deletion of a message"""
@@ -784,7 +827,11 @@ class ClientApp:
         """Send a request to delete the current user's account"""
         if messagebox.askyesno("Delete Account", 
                               "Are you sure you want to delete your account? This cannot be undone."):
-            self.comm_handler.send_message(self.serialize_message('U', [self.username]))
+            if self.protocol_type == ProtocolType.RPC:
+                response = self.comm_handler.send_message(self.serialize_message('U', [self.username]))
+                self.receive_message_helper(response['type'], response['payload'])
+            else: # json and wire
+                self.comm_handler.send_message(self.serialize_message('U', [self.username]))
 
     def update_view_count(self):
         try:
@@ -792,7 +839,11 @@ class ClientApp:
             if new_count < 0:
                 messagebox.showerror("Error", "View count must be positive")
                 return
-            self.comm_handler.send_message(self.serialize_message('W', [self.username, new_count]))
+            if self.protocol_type == ProtocolType.RPC:
+                response = self.comm_handler.send_message(self.serialize_message('W', [self.username, new_count]))
+                self.receive_message_helper(response['type'], response['payload'])
+            else: # json and wire
+                self.comm_handler.send_message(self.serialize_message('W', [self.username, new_count]))
         except ValueError:
             messagebox.showerror("Error", "Please enter a valid number")
 
@@ -805,16 +856,39 @@ class ClientApp:
         if hasattr(self, 'view_count_label'):
             self.view_count_label.config(text=f"View Count: {self.view_count}")
 
+    def on_closing(self):
+        """Handle cleanup when window closes"""
+        print("Cleaning up and closing client...")
+        if self.username:  # If we're logged in, update log-off time
+            try:
+                # Update log-off time before closing
+                data = self.serialize_message('O', [self.username])  # Special case for logout
+                response =self.comm_handler.send_message(data)
+                if self.protocol_type == ProtocolType.RPC: # some logging for rpc
+                    if response['type'] == 'E':
+                        print(f"Error: {response['payload']}")
+                    else:
+                        print(f"Success updating log off time: {response['payload']}")
+            except:
+                pass  # Don't prevent closing if this fails
+        
+        # Stop the communication handler
+        self.comm_handler.stop_server()
+        
+        # Destroy the window
+        self.root.destroy()
+
 if __name__ == "__main__":
 
     # protocol choice
     wire_protocol = ClientWireProtocol()
     json_protocol = ClientJsonProtocol()
+    rpc_protocol = ClientRpcProtocol()
 
     # communication choice
     socket_handler = ClientSocketHandler()
     rpc_handler = ClientRpcHandler()
     
     # Choose which protocol to use 
-    app = ClientApp(json_protocol, socket_handler) # change protocol here
+    app = ClientApp(rpc_protocol, rpc_handler) # change protocol here
     app.root.mainloop()
