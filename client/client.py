@@ -39,6 +39,7 @@ class ClientApp:
         self.comm_handler.start_server(host, port)
         
         self.username = ""
+        self.password = ""
         self.root = tk.Tk()
         self.root.title("Chat Client")
         # Add protocol for window close
@@ -280,7 +281,9 @@ class ClientApp:
         if self.protocol_type != ProtocolType.RPC:
             threading.Thread(target=self.receive_messages, daemon=True).start()
         else:
-            print(f"Using rpc so handling instantaneously")
+            print(f"Using rpc so polling for messages")
+            self.poll_messages()
+            
 
     def on_contact_select(self, event):
         selection = self.contacts_list.curselection()
@@ -441,6 +444,7 @@ class ClientApp:
             response = self.comm_handler.send_message(data)
             if 'S' in response:
                 self.username = username
+                self.password = password
                 messagebox.showinfo("Success", response['S'])
                 self.request_user_list()
                 self.chat_screen()
@@ -455,6 +459,7 @@ class ClientApp:
             response = self.read_json_response()
             if response[0]['type'] == 'S':
                 self.username = username
+                self.password = password
                 messagebox.showinfo("Success", response[0]['payload'])
                 self.request_user_list()
                 self.chat_screen()
@@ -472,6 +477,7 @@ class ClientApp:
             
             if chr(msg_type) == 'S':
                 self.username = username
+                self.password = password
                 messagebox.showinfo("Success", payload.decode())
                 self.request_user_list()
                 self.chat_screen()
@@ -502,10 +508,10 @@ class ClientApp:
         if self.protocol_type == ProtocolType.RPC:
             response = self.comm_handler.send_message(self.serialize_message('R', [username, password]))
             print(f"Received response: {response}")
-            if 'S' in response:
-                messagebox.showinfo("Success", response['S'])
+            if response[0]['type'] == 'S':
+                messagebox.showinfo("Success", response[0]['payload'])
             else:
-                messagebox.showerror("Error", response['message'])
+                messagebox.showerror("Error", response[0]['payload'])
         elif self.protocol_type == ProtocolType.JSON:
             self.comm_handler.send_message(self.serialize_message('R', [username, password]))
             response = self.read_json_response()
@@ -717,18 +723,29 @@ class ClientApp:
     def handle_bulk_messages(self, payload):
         """Handle bulk message delivery (stored messages)."""
         try:
+            # Clear existing messages
+            self.messages_by_user = {}
+            
             # Update UI on main thread
-            self.root.after(0, self.update_chat_with_messages, self.serialization_interface.deserialize_bulk_messages(payload, self.username, self.messages_by_user))
+            self.root.after(0, self.update_chat_with_messages, 
+                self.serialization_interface.deserialize_bulk_messages(payload, self.username, self.messages_by_user))
             
         except Exception as e:
             print(f"Error handling bulk messages: {e}")
 
     def update_chat_with_messages(self, messages):
         self.update_contacts_list()
-        # If a contact is selected, update the chat area
-        selection = self.contacts_list.curselection()
-        if selection:
-            self.display_conversation(self.contacts_list.get(selection[0]))
+        
+        # Store current contact before updating
+        current_contact = self.current_contact if hasattr(self, 'current_contact') else None
+        
+        # If we have a current contact, refresh their conversation
+        if current_contact:
+            self.chat_area.config(state='normal')
+            self.chat_area.delete(1.0, tk.END)  # Clear existing messages
+            self.display_conversation(current_contact)
+            self.chat_area.config(state='disabled')
+            self.chat_area.see(tk.END)  # Scroll to bottom
 
     def request_user_list(self):
         """Request the list of all users from the server"""
@@ -877,6 +894,25 @@ class ClientApp:
         
         # Destroy the window
         self.root.destroy()
+
+    def poll_messages(self):
+        """Periodically poll for new messages"""       
+        try:
+            # Send a login request to get any new messages
+            data = self.serialize_message('L', [self.username, self.password])  # None password indicates message check
+            print(f"Polling for messages with data: {data}")
+            response = self.comm_handler.send_message(data)
+            
+            # Process any new messages
+            if 'B' in response:
+                self.handle_bulk_messages(response['B'])
+                
+        except Exception as e:
+            print(f"Error polling messages: {e}")
+        
+        # Schedule next poll in 5 seconds if still in chat screen
+        if hasattr(self, 'chat_area'):
+            self.chat_area.after(5000, self.poll_messages)
 
 if __name__ == "__main__":
 
