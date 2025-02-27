@@ -506,7 +506,9 @@ class ClientApp:
         
         # Send registration request
         if self.protocol_type == ProtocolType.RPC:
-            response = self.comm_handler.send_message(self.serialize_message('R', [username, password]))
+            data = self.serialize_message('R', [username, password])
+            print(f"Sending registration: {len(data)} bytes")
+            response = self.comm_handler.send_message(data)
             print(f"Received response: {response}")
             if response[0]['type'] == 'S':
                 messagebox.showinfo("Success", response[0]['payload'])
@@ -912,7 +914,7 @@ class ClientApp:
         
         # Schedule next poll in 5 seconds if still in chat screen
         if hasattr(self, 'chat_area'):
-            self.chat_area.after(5000, self.poll_messages)
+            self.chat_area.after(3000, self.poll_messages)
 
 if __name__ == "__main__":
 

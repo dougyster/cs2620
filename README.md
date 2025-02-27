@@ -30,12 +30,63 @@ source 2620_chatapp_env/bin/activate
 pip install -r requirements.txt
 ```
 
-## Configuration
+
+
+
+
+## Protocol Selection
+
+### RPC (Default)
+
+To use RPC:
+1. In `routes.py`, set:
+```python
+protocol_of_choice = rpc_protocol
+```
+
+2. In `client.py`, set:
+```python
+app = ClientApp(rpc_protocol, rpc_handler)
+```
+
+
+### Wire Protocol
+
+To use Wire Protocol:
+1. In `routes.py`, set:
+```python
+protocol_of_choice = wire_protocol
+```
+
+2. In `client.py`, set:
+```python
+app = ClientApp(wire_protocol, socket_handler)
+```
+
+### JSON Protocol
+
+To use JSON Protocol:
+1. In `routes.py`, set:
+```python
+protocol_of_choice = json_protocol
+```
+
+2. In `client.py`, set:
+```python
+app = ClientApp(json_protocol, socket_handler)
+```
+
+
+
+
+## Configuration (only for custome wire protocol or json)
 
 The application supports configuration through environment variables:
 
 - `CHAT_APP_HOST`: Server host address (default: '0.0.0.0')
 - `CHAT_APP_PORT`: Server port number (default: 8081)
+
+
 
 ## Running the Application
 
@@ -68,35 +119,3 @@ python client.py
 ```
 
 The client GUI will appear with a login screen.
-
-## Protocol Selection
-
-### Wire Protocol (Default)
-
-To use Wire Protocol:
-1. In `routes.py`, set:
-```python
-protocol_of_choice = wire_protocol
-```
-
-2. In `client.py`, set:
-```python
-app = ClientApp(wire_protocol)
-```
-
-### JSON Protocol
-
-To use JSON Protocol:
-1. In `routes.py`, set:
-```python
-protocol_of_choice = json_protocol
-```
-
-2. In `client.py`, set:
-```python
-app = ClientApp(json_protocol)
-```
-
-
-
-
